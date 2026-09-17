@@ -4,6 +4,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import type { Bindings, MessageRow } from './contracts';
+import { receiveWorkflowEvent, recoverWorkflowEvents } from './workflow-events';
 import { dto, enqueue, getMessage, processMessage, recover, retryMessage } from './service';
 
 export const sender = new Hono<{Bindings: Bindings}>();
@@ -46,11 +47,19 @@ export class Messaging extends WorkerEntrypoint<Bindings> { fetch(request:Reques
 export class MessengerAdmin extends WorkerEntrypoint<Bindings> { fetch(request:Request){return admin.fetch(request,this.env,this.ctx);} }
 export default {
   fetch(){return new Response('Not Found',{status:404});},
-  async queue(batch:MessageBatch<{id:string}>,env:Bindings){
+  async queue(batch:MessageBatch<unknown>,env:Bindings){
+    if(batch.queue === "messenger-workflow-events") {
+      for(const message of batch.messages) {
+        try { await receiveWorkflowEvent(env,message.body); message.ack(); }
+        catch { message.retry({delaySeconds:120}); }
+      }
+      return;
+    }
     for(const message of batch.messages){
-      if(!message.body || typeof message.body.id!=='string'){message.ack();continue;}
-      try{await processMessage(env,message.body.id);message.ack();}catch{message.retry({delaySeconds:120});}
+      const parsed=z.object({id:z.string()}).safeParse(message.body);
+      if(!parsed.success){message.ack();continue;}
+      try{await processMessage(env,parsed.data.id);message.ack();}catch{message.retry({delaySeconds:120});}
     }
   },
-  async scheduled(_event:ScheduledController,env:Bindings){await recover(env);},
-} satisfies ExportedHandler<Bindings,{id:string}>;
+  async scheduled(_event:ScheduledController,env:Bindings){await Promise.all([recover(env),recoverWorkflowEvents(env)]);},
+} satisfies ExportedHandler<Bindings,unknown>;

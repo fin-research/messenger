@@ -13,7 +13,9 @@
     "enabled": true
   },
   "vars": {
-    "FROM_EMAIL": "no-reply@hasbai.xyz"
+    "FROM_EMAIL": "no-reply@hasbai.xyz",
+    "CLOUDFLARE_ACCOUNT_ID": "5cecc63c78acf8f5473f8745f4244448",
+    "WORKFLOW_NOTIFICATION_EMAILS": "shiyue@18.cn"
   },
   "d1_databases": [
     {
@@ -37,6 +39,14 @@
         "max_batch_timeout": 5,
         "max_retries": 3,
         "max_concurrency": 1
+      },
+      {
+        "queue": "messenger-workflow-events",
+        "max_batch_size": 5,
+        "max_batch_timeout": 5,
+        "max_retries": 10,
+        "dead_letter_queue": "messenger-workflow-events-dlq",
+        "max_concurrency": 1
       }
     ]
   },
@@ -55,6 +65,68 @@
       "binding": "TELEGRAM_USER_ID",
       "store_id": "be6d1afe7ef54df88c65a059080a3f1f",
       "secret_name": "TELEGRAM_USER_ID"
+    }
+  ],
+  "workflows": [
+    {
+      "binding": "OMO",
+      "name": "omo",
+      "class_name": "OmoWorkflow",
+      "script_name": "ingest"
+    },
+    {
+      "binding": "OPEN_MARKET",
+      "name": "open-market",
+      "class_name": "OpenMarketWorkflow",
+      "script_name": "ingest"
+    },
+    {
+      "binding": "MARKET_BRIEFING",
+      "name": "market-briefing",
+      "class_name": "MarketBriefingWorkflow",
+      "script_name": "eastmoney-dashboard"
+    },
+    {
+      "binding": "ARTICLE",
+      "name": "article",
+      "class_name": "ArticleWorkflow",
+      "script_name": "ingest"
+    },
+    {
+      "binding": "ARTICLE_CLEANUP",
+      "name": "article-cleanup",
+      "class_name": "ArchiveCleanupWorkflow",
+      "script_name": "ingest"
+    },
+    {
+      "binding": "TELEGRAM",
+      "name": "telegram",
+      "class_name": "TelegramWorkflow",
+      "script_name": "ingest"
+    },
+    {
+      "binding": "POLICY_AGGREGATION",
+      "name": "policy-aggregation",
+      "class_name": "PolicyWorkflow",
+      "script_name": "ingest"
+    },
+    {
+      "binding": "BOND_LEDGER_IMPORT",
+      "name": "bond-ledger-import",
+      "class_name": "BondLedgerImportWorkflow",
+      "script_name": "eastmoney-dashboard"
+    },
+    {
+      "binding": "FINANCING_DEBT_IMPORT",
+      "name": "financing-debt-import",
+      "class_name": "DebtImportWorkflow",
+      "script_name": "eastmoney-dashboard"
+    },
+    {
+      "binding": "ECONOMIC_INDICATOR_SYNC",
+      "name": "economic-indicator-sync",
+      "class_name": "EconomicIndicatorSyncWorkflow",
+      "script_name": "eastmoney-data"
     }
   ]
 }

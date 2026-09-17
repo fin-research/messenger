@@ -45,3 +45,28 @@ pnpm run deploy
 Secrets：Worker `RESEND_API_KEY`；Secrets Store `TELEGRAM_BOT_TOKEN` / `TELEGRAM_USER_ID`。不提交 `.dev.vars` 或 `.env`。
 
 切换顺序：创建 D1/Queue → migration → 部署 messenger 和配置 Secret → 追加调用方 migration → Gateway 权限目录/Auth0 scope → Dashboard / Ingest 绑定与调用方发布。先核验新服务，最后停用调用方渠道凭据。真实外发测试需明确指定收件人；常规验收仅 mock 渠道和只读线上探针。
+
+## Workflow 终态订阅
+
+Cloudflare Event Subscriptions → Queue `messenger-workflow-events` → D1 `workflow_events` inbox → 现有 messages/outbox → email＋Telegram。Workflow 内不发送完成/失败通知。业务通知（如央行资讯、融资提醒）继续使用 Messaging。
+
+- 全部 Workflow 订阅 instance.errored / instance.terminated；omo、market-briefing 额外订阅 instance.completed。economic-indicator-sync 的 completed 只用于检查业务 partial/failed，正常成功不通知。
+- Queue 事件只带实例 ID，Messenger 通过跨脚本 Workflow binding 的 get/status 读取 error.name/message 或成功 output；不增加 Cloudflare API 运行时凭据。
+- email 使用 WORKFLOW_NOTIFICATION_EMAILS（当前 shiyue@18.cn）；Telegram 使用既有默认 TELEGRAM_USER_ID。失败包含 Workflow、实例、时间、原始错误类型/详情和实例链接；敏感凭据脱敏，长 Telegram 分片保留正文。
+- 事件按账户/Workflow/实例/版本/事件类型/时间去重，先写 inbox，再冻结通知快照；部分渠道入队失败可恢复且不重复发送已入队渠道。同一实例重启后的新事件可再次通知。
+- 查询和入队失败由每分钟 Cron 恢复；消息渠道仍使用原有退避、Email 幂等窗口和 Telegram uncertain 规则。inbox last_error 只存安全码。
+- 事件持久化前失败由 Queue 重试，耗尽后保留在 messenger-workflow-events-dlq；运维需检查死信并原样重投事件队列。禁止将未知 schema 或未配置 binding 的事件当成功丢弃。
+
+初始化：先部署 Ingest 的 omo（保留 open-market 历史命名空间），创建两条队列，执行 0002 migration，再部署 Messenger，最后启用订阅。Dashboard 删除通知 step 后由 Git 自动部署。
+
+```sh
+pnpm exec wrangler queues create messenger-workflow-events
+pnpm exec wrangler queues create messenger-workflow-events-dlq
+pnpm db:migrate:remote
+pnpm deploy
+# 环境注入具有 Queues Write / Workers Scripts Read 的 CLOUDFLARE_API_TOKEN
+node scripts/sync-workflow-subscriptions.mjs
+node scripts/sync-workflow-subscriptions.mjs --apply
+```
+
+同步脚本默认只读规划，对已存在配置保持不动；账户新增 Workflow 未配置 binding 时明确失败。新增 Workflow 必须同步 wrangler.workflows、src/workflow-events.ts 的映射，然后重新同步订阅。所有方部署顺序不可反转。旧 open-market 保留失败订阅，不自动删除实例历史。

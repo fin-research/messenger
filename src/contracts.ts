@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { WorkflowBindingName } from './workflow-events';
 
 const common = {
   source: z.string().regex(/^[a-z0-9-]{1,64}$/),
@@ -14,7 +15,9 @@ export const messageSchema = z.discriminatedUnion('channel', [
   }).strict(),
 ]);
 export type MessageInput = z.infer<typeof messageSchema>;
-export interface Bindings {
+export interface Bindings extends Partial<Record<WorkflowBindingName, Workflow>> {
+  CLOUDFLARE_ACCOUNT_ID: string;
+  WORKFLOW_NOTIFICATION_EMAILS: string;
   DB: D1Database;
   QUEUE: Queue<{ id: string }>;
   RESEND_API_KEY: string;
