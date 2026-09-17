@@ -33,8 +33,10 @@ export async function deliver(env: Bindings, input: MessageInput, key: string): 
   try {
     const api = new Api(token, { timeoutSeconds: 30 });
     const result = await api.sendMessage(chatId, input.text);
+    if (!result || !Number.isSafeInteger(result.message_id)) throw new DeliveryError('TELEGRAM_RESPONSE_INVALID', false, true);
     return String(result.message_id);
   } catch (error) {
+    if (error instanceof DeliveryError) throw error;
     if (error instanceof GrammyError) {
       throw new DeliveryError(`TELEGRAM_${error.error_code}`, error.error_code === 429 || error.error_code >= 500,
         false, error.parameters.retry_after ?? 0);

@@ -33,3 +33,7 @@ it('Telegram transport errors remain uncertain without exposing the bot URL',asy
   vi.spyOn(Api.prototype,'sendMessage').mockRejectedValue(new HttpError('secret-token',new Error('https://api.telegram.org/botsecret/sendMessage')));
   await expect(deliver(env,{source:'test',idempotencyKey:'a',channel:'telegram',text:'Body'},'key')).rejects.toMatchObject({code:'TELEGRAM_TRANSPORT_ERROR',retryable:false,uncertain:true});
 });
+it('a malformed Telegram success response must not be recorded as accepted',async()=>{
+  vi.spyOn(Api.prototype,'sendMessage').mockResolvedValue({} as never);
+  await expect(deliver(env,{source:'test',idempotencyKey:'a',channel:'telegram',text:'Body'},'key')).rejects.toMatchObject({code:'TELEGRAM_RESPONSE_INVALID',uncertain:true});
+});
