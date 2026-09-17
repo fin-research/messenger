@@ -3,7 +3,7 @@ import {beforeAll,beforeEach,it,expect,vi} from 'vitest';
 import webpush from 'web-push';
 import initial from '../migrations/0001_messages.sql?raw';
 import migration from '../migrations/0003_user_notifications.sql?raw';
-import {notify,processNotification,saveSettings,savePush,settings} from '../src/notifications';
+import {notify,processNotification,saveSettings,savePush,settings,migrateLegacyWorkflowSubscriber} from '../src/notifications';
 import {deliver} from '../src/providers';
 import type {Bindings} from '../src/contracts';
 const db=(env as unknown as Bindings).DB;
@@ -56,4 +56,15 @@ it('push credentials are owner-scoped, encrypted, and removed after provider exp
  try{await expect(deliver(pushEnv,{source:'test',idempotencyKey:'push',channel:'webpush',userId:'auth0|test',subscriptionId:id,subscription,title:'提醒',text:'private text',url:'/',tag:'test'},'test')).rejects.toThrow('PUSH_EXPIRED');}
  finally{outgoing.mockRestore();}
  expect((await settings(bindings,'auth0|test')).devices).toHaveLength(0);
+});
+
+it('migrates the legacy operator channels once without overwriting user preferences',async()=>{
+ await db.prepare('DELETE FROM notification_settings').run();
+ const legacy={...bindings,LEGACY_WORKFLOW_USER_ID:'auth0|test',WORKFLOW_NOTIFICATION_EMAILS:'test@example.com',TELEGRAM_USER_ID:{get:async()=> '123'}};
+ await migrateLegacyWorkflowSubscriber(legacy);
+ expect((await settings(legacy,'auth0|test')).subscriptions.workflow).toEqual(['email','telegram']);
+ await saveSettings(legacy,'auth0|test',configured);
+ await migrateLegacyWorkflowSubscriber(legacy);
+ expect((await settings(legacy,'auth0|test')).email).toBe('contact@example.com');
+ expect((await settings(legacy,'auth0|test')).subscriptions.workflow).toEqual([]);
 });

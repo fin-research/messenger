@@ -16,7 +16,9 @@
     "FROM_EMAIL": "no-reply@hasbai.xyz",
     "CLOUDFLARE_ACCOUNT_ID": "5cecc63c78acf8f5473f8745f4244448",
     "WORKFLOW_NOTIFICATION_EMAILS": "shiyue@18.cn",
-    "VAPID_SUBJECT": "mailto:shiyue@18.cn"
+    "VAPID_SUBJECT": "mailto:shiyue@18.cn",
+    "LEGACY_WORKFLOW_USER_ID": "auth0|6a9e921870e37d7bbfb76c8f",
+    "VAPID_PUBLIC_KEY": "BIxrfo5sKvyQVHWaHS7EtLX5FUNd4UbnB8NxgMvwm-AdOANJRLaRsXScR_tcWi5GqXfxQKiqoqIiFCWXMW9vnGo"
   },
   "d1_databases": [
     {

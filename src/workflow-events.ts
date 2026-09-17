@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { messageSchema, type Bindings, type MessageInput } from './contracts';
-import { notify } from './notifications';
+import { notify, migrateLegacyWorkflowSubscriber } from './notifications';
 import { enqueue } from './service';
 
 export const workflowBindings = {
@@ -101,6 +101,7 @@ export async function processWorkflowEvent(env: Bindings, id: string) {
   const row = await env.DB.prepare('SELECT * FROM workflow_events WHERE id=?').bind(id).first<EventRow>();
   if (!row || row.completed_at !== null) return;
   try {
+    await migrateLegacyWorkflowSubscriber(env);
     if (!row.messages) {
       const event = eventSchema.parse(JSON.parse(row.event));
       const key = workflowBindings[event.source.workflowName as keyof typeof workflowBindings];

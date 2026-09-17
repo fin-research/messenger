@@ -121,3 +121,14 @@ export async function scanNotifications(env:Bindings,now:number) {
  if(!response.ok)throw new Error('NOTIFICATION_SCAN_FAILED');
  await env.DB.prepare("UPDATE notification_schedule SET completed_slot=?,lease_until=0 WHERE id='dashboard' AND lease_until=?").bind(slot,now+55000).run();
 }
+
+/** One-time additive migration: keep the existing operator channels until they edit settings. */
+export async function migrateLegacyWorkflowSubscriber(env:Bindings) {
+ const userId=env.LEGACY_WORKFLOW_USER_ID;
+ if(!userId)return;
+ if(await env.DB.prepare('SELECT user_id FROM notification_settings WHERE user_id=?').bind(userId).first())return;
+ const chatId=await env.TELEGRAM_USER_ID.get();
+ const value=settingsSchema.parse({email:env.WORKFLOW_NOTIFICATION_EMAILS,telegramChatId:chatId,subscriptions:{workflow:['email','telegram'],trading:[],financing:[]}});
+ await env.DB.prepare(`INSERT INTO notification_settings(user_id,email,telegram_chat_id,subscriptions,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO NOTHING`)
+ .bind(userId,value.email,value.telegramChatId,JSON.stringify(value.subscriptions),Date.now()).run();
+}

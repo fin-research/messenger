@@ -30,6 +30,7 @@ export type MessageInput = z.infer<typeof messageSchema>;
 export interface Bindings extends Partial<Record<WorkflowBindingName, Workflow>> {
   CLOUDFLARE_ACCOUNT_ID: string;
   WORKFLOW_NOTIFICATION_EMAILS: string;
+  LEGACY_WORKFLOW_USER_ID?: string;
   DB: D1Database;
   QUEUE: Queue<{ id: string; kind?: 'notification' }>;
   VAPID_PUBLIC_KEY?: string;
