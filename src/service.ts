@@ -11,8 +11,8 @@ export async function getMessage(env: Bindings, id: string) {
 export function dto(row: MessageRow) {
   const input = messageSchema.parse(JSON.parse(row.payload));
   return { id: row.id, source: row.source, channel: row.channel, status: row.status,
-    subject: input.channel === 'email' ? input.subject : input.text.slice(0,120),
-    recipient: input.channel === 'email' ? input.to.join(', ') : input.chatId ?? '默认 Telegram',
+    subject: input.channel === 'email' ? input.subject : input.channel === 'webpush' ? input.title : input.text.slice(0,120),
+    recipient: input.channel === 'email' ? input.to.join(', ') : input.channel === 'webpush' ? '浏览器设备' : input.chatId ?? '默认 Telegram',
     attempts: row.attempts, providerId: row.provider_id, error: row.last_error,
     createdAt: row.created_at, updatedAt: row.updated_at, nextAttemptAt: row.next_attempt_at };
 }
@@ -76,7 +76,7 @@ export async function recover(env: Bindings, now = Date.now()) {
   // An interrupted send may have reached the provider. Telegram cannot be safely replayed.
   const stale = await env.DB.prepare(`SELECT * FROM messages WHERE status='processing' AND lease_until<? LIMIT 100`).bind(now).all<MessageRow>();
   for (const row of stale.results) {
-    const status = row.channel === 'email' && row.cycle_attempts < MAX_ATTEMPTS && now-(row.first_attempt_at ?? 0)<EMAIL_SAFE_WINDOW_MS ? 'retrying' : 'uncertain';
+    const status = (row.channel === 'email' || row.channel === 'webpush') && row.cycle_attempts < MAX_ATTEMPTS && now-(row.first_attempt_at ?? 0)<EMAIL_SAFE_WINDOW_MS ? 'retrying' : 'uncertain';
     await env.DB.batch([
       env.DB.prepare(`UPDATE messages SET status=?,last_error='WORKER_INTERRUPTED',updated_at=?,next_attempt_at=?,lease_token=NULL,lease_until=NULL
         WHERE id=? AND status='processing' AND lease_token=?`).bind(status,now,now,row.id,row.lease_token),

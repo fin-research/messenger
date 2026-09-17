@@ -1,6 +1,33 @@
 {
-  "name": "messenger", "version": "1.0.0", "private": true, "type": "module", "packageManager": "pnpm@10.33.2",
-  "scripts": { "dev": "wrangler dev", "typegen": "wrangler types", "check": "tsc --noEmit", "test": "vitest run", "deploy:dry": "wrangler deploy --dry-run", "deploy": "wrangler deploy", "db:migrate:local": "wrangler d1 migrations apply DB --local", "db:migrate:remote": "wrangler d1 migrations apply DB --remote" },
-  "dependencies": { "hono": "latest", "zod": "4.4.3", "resend": "latest", "grammy": "latest" },
-  "devDependencies": { "@cloudflare/vitest-pool-workers": "latest", "@cloudflare/workers-types": "latest", "@types/node": "latest", "typescript": "latest", "vitest": "4.1.10", "wrangler": "4.126.0" }
+  "name": "messenger",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.33.2",
+  "scripts": {
+    "dev": "wrangler dev",
+    "typegen": "wrangler types",
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "deploy:dry": "wrangler deploy --dry-run",
+    "deploy": "wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote"
+  },
+  "dependencies": {
+    "hono": "latest",
+    "zod": "4.4.3",
+    "resend": "latest",
+    "grammy": "latest",
+    "web-push": "3.6.7"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "latest",
+    "@cloudflare/workers-types": "latest",
+    "@types/node": "latest",
+    "typescript": "latest",
+    "vitest": "4.1.10",
+    "wrangler": "4.126.0",
+    "@types/web-push": "3.6.4"
+  }
 }

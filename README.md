@@ -70,3 +70,15 @@ node scripts/sync-workflow-subscriptions.mjs --apply
 ```
 
 同步脚本默认只读规划，对已存在配置保持不动；账户新增 Workflow 未配置 binding 时明确失败。新增 Workflow 必须同步 wrangler.workflows、src/workflow-events.ts 的映射，然后重新同步订阅。所有方部署顺序不可反转。旧 open-market 保留失败订阅，不自动删除实例历史。
+
+## 用户通知与 Web Push
+
+逻辑事件 `POST /notifications`（source、idempotencyKey、category、title、text、站内 url、可选 userIds）先进入 notifications inbox，Queue 只携带 `{id,kind:"notification"}`。消费者读取用户订阅与当前 Gateway 资格，冻结渠道消息，再进入原 messages 投递队列。生成端不读取联系方式、不决定渠道；最后发送前再次检查退订、联系方式变更和访问资格。旧 `/messages` 保留兼容既有明确收件人的业务。
+
+通知类型：workflow（管理员）、trading（交易研究读取权限）、financing（项目读取权限，并由业务指定责任人）。联系方式与订阅由 Messenger D1 独占，使用 Auth0 subject 关联；联系邮箱独立于账号邮箱。用户设置仅从 Dashboard 的 MessengerAdmin 绑定 `/users/:subject/settings` 读写；Dashboard 从可信会话派生 subject。推送设备每人最多 10 个，不返回 endpoint/auth/p256dh。队列只含 ID，管理详情也不暴露推送能力凭据。
+
+Web Push 使用 VAPID 与 aes128gcm；Secret 为 VAPID_PRIVATE_KEY，VAPID_PUBLIC_KEY 为公开配置，VAPID_SUBJECT 为 mailto 联系方式。通过 web-push 生成加密请求后使用 Workers fetch，禁止重定向，接收方限浏览器厂商推送域。404/410 移除失效设备，429/5xx 统一退避；浏览器以事件 tag 合并重复提示。
+
+Messenger 每分钟调用 Dashboard 私有 NotificationSource `/scan`，统一触发交易流程和融资待办的通知生成。业务查询和记录仍归 Dashboard；不直接绑定融资数据库。`/eligible` 从 Gateway 取得有效账号与通知资格，故障时不放宽权限。扫描使用 D1 槽位和 lease，失败保留重试；正常业务采集/报告 Workflow 的 Cron 保持在各自所有方。
+
+发布：先部署 Gateway 资格接口和 admin 角色；应用 Dashboard 1019 D1 migration，部署含 NotificationSource 的 Dashboard；应用 Messenger 0003，配置 VAPID，部署 Messenger。0003 重建渠道 CHECK 时保留全部历史消息、尝试、人工重试及外键。升级前核对历史行计数和待处理事件，升级后回读版本、配置与表计数。不以模拟推送声称真实设备收到通知。

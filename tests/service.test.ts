@@ -1,3 +1,4 @@
+import subscriptionsSchema from '../migrations/0003_user_notifications.sql?raw';
 import { env } from 'cloudflare:test';
 import { beforeAll,beforeEach,describe,it,expect,vi } from 'vitest';
 import schema from '../migrations/0001_messages.sql?raw';
@@ -9,7 +10,7 @@ const db=(env as unknown as Bindings).DB;
 const queue={send:vi.fn(async()=>{})};
 const bindings={DB:db,QUEUE:queue} as unknown as Bindings;
 const input={source:'test',idempotencyKey:'event-1',channel:'telegram',text:'测试通知'};
-beforeAll(async()=>{await db.batch(schema.split(';').map(x=>x.trim()).filter(Boolean).map(sql=>db.prepare(sql)));});
+beforeAll(async()=>{await db.batch((schema+'\n'+subscriptionsSchema).split(';').map(x=>x.trim()).filter(Boolean).map(sql=>db.prepare(sql)));});
 beforeEach(async()=>{await db.batch(['DELETE FROM retry_audit','DELETE FROM attempts','DELETE FROM messages'].map(sql=>db.prepare(sql)));queue.send.mockReset();queue.send.mockResolvedValue(undefined);});
 describe('durable messenger',()=>{
  it('persists before enqueue, survives queue outage and deduplicates submissions',async()=>{
