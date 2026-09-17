@@ -1,0 +1,60 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "messenger",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-17",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "account_id": "5cecc63c78acf8f5473f8745f4244448",
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "FROM_EMAIL": "no-reply@hasbai.xyz"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "messenger",
+      "database_id": "95bddaf6-ceeb-4881-bd56-a14124f9c2b4",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "QUEUE",
+        "queue": "messenger"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "messenger",
+        "max_batch_size": 5,
+        "max_batch_timeout": 5,
+        "max_retries": 3,
+        "max_concurrency": 1
+      }
+    ]
+  },
+  "triggers": {
+    "crons": [
+      "* * * * *"
+    ]
+  },
+  "secrets_store_secrets": [
+    {
+      "binding": "TELEGRAM_BOT_TOKEN",
+      "store_id": "be6d1afe7ef54df88c65a059080a3f1f",
+      "secret_name": "TELEGRAM_BOT_TOKEN"
+    },
+    {
+      "binding": "TELEGRAM_USER_ID",
+      "store_id": "be6d1afe7ef54df88c65a059080a3f1f",
+      "secret_name": "TELEGRAM_USER_ID"
+    }
+  ]
+}
