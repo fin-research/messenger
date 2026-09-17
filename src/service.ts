@@ -1,5 +1,5 @@
 import { HTTPException } from 'hono/http-exception';
-import { messageSchema, type Bindings, type MessageInput, type MessageRow } from './contracts';
+import { messageSchema, type Bindings, type MessageRow } from './contracts';
 import { deliver, DeliveryError } from './providers';
 
 const MAX_ATTEMPTS = 6;

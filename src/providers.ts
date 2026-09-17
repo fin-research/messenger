@@ -19,7 +19,7 @@ export async function deliver(env: Bindings, input: MessageInput, key: string): 
     } catch { throw new DeliveryError('EMAIL_TRANSPORT_ERROR', true, true); }
     if (result.error) {
       const code = result.error.name;
-      const retryable = ['rate_limit_exceeded','application_error','internal_server_error','concurrent_idempotent_requests','internal_server_error'].includes(code);
+      const retryable = ['rate_limit_exceeded','application_error','internal_server_error','concurrent_idempotent_requests'].includes(code);
       // SDK transport failures can be represented as application_error rather than thrown.
       throw new DeliveryError(`EMAIL_${code}`, retryable, code === 'application_error');
     }

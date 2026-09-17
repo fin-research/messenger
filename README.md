@@ -39,7 +39,7 @@ pnpm check
 pnpm test
 pnpm deploy:dry
 pnpm db:migrate:remote
-pnpm deploy
+pnpm run deploy
 ```
 
 Secrets：Worker `RESEND_API_KEY`；Secrets Store `TELEGRAM_BOT_TOKEN` / `TELEGRAM_USER_ID`。不提交 `.dev.vars` 或 `.env`。

@@ -48,6 +48,17 @@ describe('durable messenger',()=>{
    await db.prepare("UPDATE messages SET status='processing',lease_until=1,lease_token='old',attempts=1 WHERE id=?").bind(row.id).run();
    await recover(bindings);expect((await getMessage(bindings,row.id))?.status).toBe('uncertain');
  });
+ it('a late provider response cannot overwrite a recovered attempt',async()=>{
+   const row=await enqueue(bindings,input);
+   let finish!: (value:string)=>void,started!:()=>void;
+   const ready=new Promise<void>(resolve=>started=resolve);
+   const pending=processMessage(bindings,row.id,async()=>{started();return new Promise<string>(resolve=>finish=resolve);});
+   await ready;
+   await recover(bindings,Date.now()+180_000);
+   finish('late-provider-id');await pending;
+   expect((await getMessage(bindings,row.id))?.status).toBe('uncertain');
+   expect(await db.prepare('SELECT status,provider_id FROM attempts WHERE message_id=?').bind(row.id).first()).toEqual({status:'uncertain',provider_id:null});
+ });
  it('reuses the email provider key within its window and stops outside it',async()=>{
    const row=await enqueue(bindings,{source:'test',idempotencyKey:'mail',channel:'email',to:['a@example.com'],subject:'Subject',text:'Body'});
    const send=vi.fn(async()=>{throw new DeliveryError('EMAIL_TRANSPORT_ERROR',true,true);});
