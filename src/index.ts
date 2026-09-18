@@ -7,6 +7,7 @@ import type { Bindings, MessageRow } from './contracts';
 import { receiveWorkflowEvent, recoverWorkflowEvents } from './workflow-events';
 import { notify, settings, saveSettings, savePush, processNotification, recoverNotifications, scanNotifications, migrateLegacyWorkflowSubscriber } from './notifications';
 import { dto, enqueue, getMessage, processMessage, recover, retryMessage } from './service';
+import { sendTestMessages, recoverTestBatches } from './admin-tests';
 
 export const sender = new Hono<{Bindings: Bindings}>();
 export const admin = new Hono<{Bindings: Bindings}>();
@@ -21,6 +22,7 @@ sender.get('/messages/:id',async c => {
   return row ? c.json(dto(row)) : c.json({error:'NOT_FOUND'},404);
 });
 admin.get('/users/:id/settings',async c=>c.json(await settings(c.env,c.req.param('id'))));
+admin.post('/test-messages',async c=>c.json(await sendTestMessages(c.env,await c.req.json()),202));
 admin.put('/users/:id/settings',async c=>c.json(await saveSettings(c.env,c.req.param('id'),await c.req.json())));
 admin.post('/users/:id/push',async c=>c.json(await savePush(c.env,c.req.param('id'),await c.req.json())));
 admin.delete('/users/:id/push/:device',async c=>{
@@ -72,5 +74,5 @@ export default {
       try{if(parsed.data.kind==='notification')await processNotification(env,parsed.data.id);else await processMessage(env,parsed.data.id);message.ack();}catch{message.retry({delaySeconds:120});}
     }
   },
-  async scheduled(event:ScheduledController,env:Bindings){await migrateLegacyWorkflowSubscriber(env);await Promise.all([recover(env),recoverWorkflowEvents(env),recoverNotifications(env),scanNotifications(env,event.scheduledTime)]);},
+  async scheduled(event:ScheduledController,env:Bindings){await migrateLegacyWorkflowSubscriber(env);await Promise.all([recover(env),recoverWorkflowEvents(env),recoverNotifications(env),recoverTestBatches(env),scanNotifications(env,event.scheduledTime)]);},
 } satisfies ExportedHandler<Bindings,unknown>;

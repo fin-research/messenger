@@ -7,6 +7,13 @@ export class DeliveryError extends Error {
   constructor(public code: string, public retryable = false, public uncertain = false, public retryAfter = 0) { super(code); }
 }
 export async function deliver(env: Bindings, input: MessageInput, key: string): Promise<string> {
+  if (input.adminTest) {
+    const row = await env.DB.prepare('SELECT email,telegram_chat_id FROM notification_settings WHERE user_id=?')
+      .bind(input.adminTest.userId).first<{email:string;telegram_chat_id:string}>();
+    if (input.channel === 'email' && (!row?.email || input.to.length !== 1 || input.to[0] !== row.email)
+      || input.channel === 'telegram' && (!row?.telegram_chat_id || input.chatId !== row.telegram_chat_id)
+      || input.channel === 'webpush' && input.userId !== input.adminTest.userId) throw new DeliveryError('TEST_CONTACT_CHANGED');
+  }
   if(input.notification) {
     const {userId,category}=input.notification;
     const row=await env.DB.prepare('SELECT subscriptions,email,telegram_chat_id FROM notification_settings WHERE user_id=?').bind(userId)
