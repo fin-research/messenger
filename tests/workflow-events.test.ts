@@ -1,3 +1,5 @@
+import { processNotification, saveSettings } from '../src/notifications';
+import subscriptionsSchema from '../migrations/0003_user_notifications.sql?raw';
 import { env } from 'cloudflare:test';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import messagesSchema from '../migrations/0001_messages.sql?raw';
@@ -9,15 +11,16 @@ const account = '5cecc63c78acf8f5473f8745f4244448';
 const status = vi.fn();
 const binding = { get: vi.fn(async () => ({status})) };
 const bindings = {DB:db, QUEUE:{send:vi.fn(async()=>{})}, CLOUDFLARE_ACCOUNT_ID:account, WORKFLOW_NOTIFICATION_EMAILS:'test@example.com',
-  OMO:binding, MARKET_BRIEFING:binding, ARTICLE:binding, ECONOMIC_INDICATOR_SYNC:binding } as unknown as Bindings;
+  NOTIFICATION_SOURCE:{fetch:async()=>Response.json([{id:'auth0|test',categories:['workflow']}])}, OMO:binding, MARKET_BRIEFING:binding, ARTICLE:binding, ECONOMIC_INDICATOR_SYNC:binding } as unknown as Bindings;
 const event = (name='article', type='errored', timestamp='2026-09-17T01:25:00.000Z') => ({
   type:`cf.workflows.workflow.instance.${type}`,source:{type:'workflows.workflow',workflowName:name},
   payload:{versionId:'v1',instanceId:'instance-1'},metadata:{accountId:account,eventTimestamp:timestamp,eventSchemaVersion:1,eventSubscriptionId:'subscription-1'},
 });
-const contents = async () => (await db.prepare('SELECT payload FROM messages ORDER BY channel,idempotency_key').all<{payload:string}>()).results.map(row=>JSON.parse(row.payload));
-beforeAll(async()=>{ await db.batch((messagesSchema+'\n'+eventsSchema).split(';').map(x=>x.trim()).filter(Boolean).map(sql=>db.prepare(sql))); });
+const contents = async () => {for(const row of (await db.prepare('SELECT id FROM notifications WHERE completed_at IS NULL').all<{id:string}>()).results)await processNotification(bindings,row.id);return (await db.prepare('SELECT payload FROM messages ORDER BY channel,idempotency_key').all<{payload:string}>()).results.map(row=>JSON.parse(row.payload));};
+beforeAll(async()=>{ await db.batch((messagesSchema+'\n'+eventsSchema+'\n'+subscriptionsSchema).split(';').map(x=>x.trim()).filter(Boolean).map(sql=>db.prepare(sql))); });
 beforeEach(async()=>{
-  await db.batch(['DELETE FROM retry_audit','DELETE FROM attempts','DELETE FROM messages','DELETE FROM workflow_events'].map(sql=>db.prepare(sql)));
+  await db.batch(['DELETE FROM retry_audit','DELETE FROM attempts','DELETE FROM messages','DELETE FROM workflow_events','DELETE FROM notifications','DELETE FROM notification_settings'].map(sql=>db.prepare(sql)));
+  await saveSettings(bindings,'auth0|test',{email:'test@example.com',telegramChatId:'123',subscriptions:{workflow:['email','telegram'],trading:[],financing:[]}});
   status.mockReset(); status.mockResolvedValue({status:'errored',error:{name:'Error',message:'fetch-industry: HTTP 503'}});
   vi.mocked(bindings.QUEUE.send).mockReset();
 });
@@ -70,7 +73,7 @@ describe('Workflow events inbox',()=>{
     await receiveWorkflowEvent(bindings,event()); const messages=await contents();
     const telegram=messages.filter(x=>x.channel==='telegram'); expect(telegram.length).toBeGreaterThan(1);
     expect(telegram.every(x=>x.text.length<=4096)).toBe(true);
-    expect(telegram.map(x=>x.text).join('')).toBe(messages[0].text);
+    expect(telegram.map(x=>x.text).join('')).toBe(messages[0].subject+'\n'+messages[0].text);
     expect(messages[0].text).not.toContain('private');
     expect(safeDetail('https://api.telegram.org/bot123:abc/sendMessage Bearer abc')).not.toContain('123:abc');
   });

@@ -5,6 +5,7 @@ import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import type { Bindings, MessageRow } from './contracts';
 import { receiveWorkflowEvent, recoverWorkflowEvents } from './workflow-events';
+import { notify, settings, saveSettings, savePush, processNotification, recoverNotifications, scanNotifications, migrateLegacyWorkflowSubscriber } from './notifications';
 import { dto, enqueue, getMessage, processMessage, recover, retryMessage } from './service';
 
 export const sender = new Hono<{Bindings: Bindings}>();
@@ -13,12 +14,20 @@ for (const app of [sender,admin]) {
   app.use('*',bodyLimit({maxSize: 450_000}));
   app.onError((error,c) => error instanceof HTTPException ? c.json({error:error.message},error.status) : c.json({error:'MESSENGER_UNAVAILABLE'},503));
 }
+sender.post('/notifications',async c => c.json(await notify(c.env,await c.req.json()),202));
 sender.post('/messages',async c => c.json(await enqueue(c.env,await c.req.json()),202));
 sender.get('/messages/:id',async c => {
   const row=await getMessage(c.env,c.req.param('id'));
   return row ? c.json(dto(row)) : c.json({error:'NOT_FOUND'},404);
 });
-const filterSchema=z.object({status:z.enum(['queued','processing','retrying','accepted','failed','uncertain']).optional(),channel:z.enum(['email','telegram']).optional(),source:z.string().max(64).optional(),before:z.coerce.number().int().positive().optional(),limit:z.coerce.number().int().min(1).max(100).default(30)});
+admin.get('/users/:id/settings',async c=>c.json(await settings(c.env,c.req.param('id'))));
+admin.put('/users/:id/settings',async c=>c.json(await saveSettings(c.env,c.req.param('id'),await c.req.json())));
+admin.post('/users/:id/push',async c=>c.json(await savePush(c.env,c.req.param('id'),await c.req.json())));
+admin.delete('/users/:id/push/:device',async c=>{
+ await c.env.DB.prepare('DELETE FROM push_subscriptions WHERE user_id=? AND id=?').bind(c.req.param('id'),c.req.param('device')).run();
+ return c.json({ok:true});
+});
+const filterSchema=z.object({status:z.enum(['queued','processing','retrying','accepted','failed','uncertain']).optional(),channel:z.enum(['email','telegram','webpush']).optional(),source:z.string().max(64).optional(),before:z.coerce.number().int().positive().optional(),limit:z.coerce.number().int().min(1).max(100).default(30)});
 admin.get('/messages',async c => {
   const parsed=filterSchema.safeParse(c.req.query());
   if(!parsed.success)return c.json({error:'INVALID_FILTER'},422);
@@ -36,7 +45,9 @@ admin.get('/messages/:id',async c => {
   if(!row)return c.json({error:'NOT_FOUND'},404);
   const attempts=await c.env.DB.prepare('SELECT number,started_at,finished_at,status,provider_id,error FROM attempts WHERE message_id=? ORDER BY number DESC LIMIT 100').bind(row.id).all();
   const audit=await c.env.DB.prepare('SELECT actor,created_at,previous_status FROM retry_audit WHERE message_id=? ORDER BY id DESC LIMIT 100').bind(row.id).all();
-  return c.json({...dto(row),content:JSON.parse(row.payload),history:attempts.results,retries:audit.results});
+  const content=JSON.parse(row.payload);
+  if(content.channel==='webpush'){delete content.subscription;}
+  return c.json({...dto(row),content,history:attempts.results,retries:audit.results});
 });
 admin.post('/messages/:id/retry',async c => {
   const value=z.object({actor:z.string().min(1).max(200),confirmUncertain:z.boolean().default(false)}).safeParse(await c.req.json());
@@ -56,10 +67,10 @@ export default {
       return;
     }
     for(const message of batch.messages){
-      const parsed=z.object({id:z.string()}).safeParse(message.body);
+      const parsed=z.object({id:z.string(),kind:z.literal('notification').optional()}).safeParse(message.body);
       if(!parsed.success){message.ack();continue;}
-      try{await processMessage(env,parsed.data.id);message.ack();}catch{message.retry({delaySeconds:120});}
+      try{if(parsed.data.kind==='notification')await processNotification(env,parsed.data.id);else await processMessage(env,parsed.data.id);message.ack();}catch{message.retry({delaySeconds:120});}
     }
   },
-  async scheduled(_event:ScheduledController,env:Bindings){await Promise.all([recover(env),recoverWorkflowEvents(env)]);},
+  async scheduled(event:ScheduledController,env:Bindings){await migrateLegacyWorkflowSubscriber(env);await Promise.all([recover(env),recoverWorkflowEvents(env),recoverNotifications(env),scanNotifications(env,event.scheduledTime)]);},
 } satisfies ExportedHandler<Bindings,unknown>;

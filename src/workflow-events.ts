@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { messageSchema, type Bindings, type MessageInput } from './contracts';
+import { notify, migrateLegacyWorkflowSubscriber } from './notifications';
 import { enqueue } from './service';
 
 export const workflowBindings = {
@@ -100,6 +101,7 @@ export async function processWorkflowEvent(env: Bindings, id: string) {
   const row = await env.DB.prepare('SELECT * FROM workflow_events WHERE id=?').bind(id).first<EventRow>();
   if (!row || row.completed_at !== null) return;
   try {
+    await migrateLegacyWorkflowSubscriber(env);
     if (!row.messages) {
       const event = eventSchema.parse(JSON.parse(row.event));
       const key = workflowBindings[event.source.workflowName as keyof typeof workflowBindings];
@@ -116,7 +118,8 @@ export async function processWorkflowEvent(env: Bindings, id: string) {
     // Re-read the winning snapshot so concurrent consumers cannot enqueue different payloads.
     const snapshot = await env.DB.prepare('SELECT messages FROM workflow_events WHERE id=?').bind(id).first<{messages: string}>();
     const messages = z.array(messageSchema).parse(JSON.parse(snapshot!.messages));
-    for (const message of messages) await enqueue(env, message);
+    const email=messages.find(message=>message.channel==='email');
+    if(email?.channel==='email') await notify(env,{source:'workflow',idempotencyKey:id,category:'workflow',title:email.subject,text:email.text ?? '',url:'/management/messenger'});
     await env.DB.prepare('UPDATE workflow_events SET completed_at=?,last_error=NULL WHERE id=? AND completed_at IS NULL').bind(Date.now(), id).run();
   } catch {
     await env.DB.prepare(`UPDATE workflow_events SET attempts=attempts+1,next_attempt_at=?,last_error='WORKFLOW_EVENT_DEFERRED' WHERE id=? AND completed_at IS NULL`)
