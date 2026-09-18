@@ -39,8 +39,9 @@ export async function deliver(env: Bindings, input: MessageInput, key: string): 
       url: input.url, tag: input.tag }), { TTL: 3600, vapidDetails: {
       subject: env.VAPID_SUBJECT, publicKey: env.VAPID_PUBLIC_KEY, privateKey: env.VAPID_PRIVATE_KEY } });
     let response: Response;
+    // Workers rejects redirect: 'error'; manual keeps push credentials on the original endpoint.
     try { response = await fetch(details.endpoint, { method: 'POST', headers: details.headers,
-      body: new Uint8Array(details.body!), redirect: 'error', signal: AbortSignal.timeout(30_000) }); }
+      body: new Uint8Array(details.body!), redirect: 'manual', signal: AbortSignal.timeout(30_000) }); }
     catch { throw new DeliveryError('PUSH_TRANSPORT_ERROR', true); }
     if (response.status === 404 || response.status === 410) {
       await env.DB.prepare('DELETE FROM push_subscriptions WHERE id=? AND endpoint=?').bind(input.subscriptionId,input.subscription.endpoint).run();
