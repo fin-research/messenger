@@ -49,13 +49,33 @@ it('push credentials are owner-scoped, encrypted, and removed after provider exp
  await expect(savePush(bindings,'auth0|other',subscription)).rejects.toThrow('PUSH_OWNED_BY_ANOTHER_ACCOUNT');
  await expect(savePush(bindings,'auth0|test',{...subscription,endpoint:'https://internal.invalid/secret'})).rejects.toThrow('INVALID_PUSH_SUBSCRIPTION');
  const pushEnv={...bindings,VAPID_PUBLIC_KEY:keys.publicKey,VAPID_PRIVATE_KEY:keys.privateKey,VAPID_SUBJECT:'mailto:test@example.com'};
- const outgoing=vi.spyOn(globalThis,'fetch').mockImplementation(async(_url,options)=>{
-  expect(options?.headers).toHaveProperty('Content-Encoding','aes128gcm');expect(options?.redirect).toBe('error');
-  expect(new TextDecoder().decode(options!.body as Uint8Array)).not.toContain('private text');return new Response(null,{status:410});
+ const outgoing=vi.spyOn(globalThis,'fetch').mockImplementation(async(url,options)=>{
+  // Exercise workerd's Request validation instead of accepting unsupported fetch options.
+  const request=new Request(url,options);
+  expect(request.headers.get('Content-Encoding')).toBe('aes128gcm');expect(request.redirect).toBe('manual');
+  expect(await request.text()).not.toContain('private text');return new Response(null,{status:410});
  });
  try{await expect(deliver(pushEnv,{source:'test',idempotencyKey:'push',channel:'webpush',userId:'auth0|test',subscriptionId:id,subscription,title:'提醒',text:'private text',url:'/',tag:'test'},'test')).rejects.toThrow('PUSH_EXPIRED');}
  finally{outgoing.mockRestore();}
  expect((await settings(bindings,'auth0|test')).devices).toHaveLength(0);
+});
+
+it.each([201,302,307])('handles push HTTP %i without following redirects or deleting the device',async(status)=>{
+ const keys=webpush.generateVAPIDKeys();const subscription={endpoint:'https://fcm.googleapis.com/fcm/send/test',keys:{p256dh:keys.publicKey,auth:Buffer.alloc(16,1).toString('base64url')}};
+ const state=await savePush(bindings,'auth0|test',subscription);const id=(state.devices[0] as {id:string}).id;
+ const pushEnv={...bindings,VAPID_PUBLIC_KEY:keys.publicKey,VAPID_PRIVATE_KEY:keys.privateKey,VAPID_SUBJECT:'mailto:test@example.com'};
+ const outgoing=vi.spyOn(globalThis,'fetch').mockImplementation(async(url,options)=>{
+  const request=new Request(url,options);
+  expect(request.redirect).toBe('manual');
+  return new Response(null,{status,headers:{Location:'https://unexpected.invalid/push'}});
+ });
+ try{
+  const result=deliver(pushEnv,{source:'test',idempotencyKey:'push',channel:'webpush',userId:'auth0|test',subscriptionId:id,subscription,title:'提醒',text:'private text',url:'/',tag:'test'},'test');
+  if(status===201)await expect(result).resolves.toBe('test');
+  else await expect(result).rejects.toMatchObject({code:`PUSH_${status}`,retryable:false});
+  expect(outgoing).toHaveBeenCalledTimes(1);
+  expect((await settings(bindings,'auth0|test')).devices).toHaveLength(1);
+ }finally{outgoing.mockRestore();}
 });
 
 it('migrates the legacy operator channels once without overwriting user preferences',async()=>{
