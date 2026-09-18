@@ -14,7 +14,7 @@ Telegram 使用 `channel: "telegram"`、`text`，可选 `chatId`；省略时读�
 
 成功返回 202 与 `{id,status,...}`，表示 D1 已持久化。相同 source/key/payload 返回原记录；相同 key 不同内容返回 409。不要用随机 key 包装同一业务事件。`GET /messages/:id` 查询状态。
 
-管理端经 `MESSENGER_ADMIN → messenger#MessengerAdmin` 查询 `/messages`、`/messages/:id` 或调用 `/messages/:id/retry`。列表支持 status/channel/source、limit、before 游标。重试需要可信 `actor`，结果不确定时额外 `confirmUncertain=true`。调用方 Dashboard 从已验证用户派生 actor，Gateway 分别要求 `messenger.delivery:read` 与 `messenger.delivery:retry`。
+管理端经 `MESSENGER_ADMIN → messenger#MessengerAdmin` 查询 `/messages`、`/messages/:id` 或调用 `/messages/:id/retry`。列表支持 status/channel/source、limit、before 游标。重试需要可信 `actor`，结果不确定时额外 `confirmUncertain=true`。调用方 Dashboard 从已验证用户派生 actor，Gateway 对管理页面和重试要求全站 `admin`。
 
 两个入口只通过 Service Binding 可达；默认 fetch 404，不接受公网身份 Header。业务方仅持有提交绑定，Ingest 没有管理绑定。
 
@@ -82,3 +82,9 @@ Web Push 使用 VAPID 与 aes128gcm；Secret 为 VAPID_PRIVATE_KEY，VAPID_PUBLI
 Messenger 每分钟调用 Dashboard 私有 NotificationSource `/scan`，统一触发交易流程和融资待办的通知生成。业务查询和记录仍归 Dashboard；不直接绑定融资数据库。`/eligible` 从 Gateway 取得有效账号与通知资格，故障时不放宽权限。扫描使用 D1 槽位和 lease，失败保留重试；正常业务采集/报告 Workflow 的 Cron 保持在各自所有方。
 
 发布：先部署 Gateway 资格接口和 admin 角色；应用 Dashboard 1019 D1 migration，部署含 NotificationSource 的 Dashboard；应用 Messenger 0003，配置 VAPID，部署 Messenger。0003 重建渠道 CHECK 时保留全部历史消息、尝试、人工重试及外键。升级前核对历史行计数和待处理事件，升级后回读版本、配置与表计数。不以模拟推送声称真实设备收到通知。
+
+## 管理员测试消息
+
+Dashboard「通知管理 → 测试消息」通过私有 `MessengerAdmin POST /test-messages` 提交 actor、requestId、userIds（最多 50 人）、channels、title、text。Gateway named action 与 Dashboard 均检查 admin，actor 从可信身份派生。Messenger 按用户已保存的独立联系邮箱、Telegram chat 和全部 Push 设备解析目标，不回退账号邮箱或默认 Telegram；显式测试不依赖业务类别订阅。
+
+`0004_admin_test_batches.sql` 冻结批次及目标，防止网络重试重复发送或换收件人。每次最多生成 25 条投递，剩余由集中分钟 Cron 恢复。每条仍经 messages / Queue 投递，source 为 admin-test，payload 记录 actor；发送前重查联系方式与 Push 设备归属。返回的 skipped 给出未配置渠道，不泄漏 Push 凭据。批次入队不表示终端送达。

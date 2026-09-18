@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { WorkflowBindingName } from './workflow-events';
 
 const common = {
+  adminTest: z.object({userId:z.string().min(1),actor:z.string().min(1)}).strict().optional(),
   notification: z.object({userId:z.string().min(1),category:z.enum(['workflow','trading','financing'])}).strict().optional(),
   source: z.string().regex(/^[a-z0-9-]{1,64}$/),
   idempotencyKey: z.string().min(1).max(240),
