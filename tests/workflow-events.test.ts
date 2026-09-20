@@ -32,6 +32,8 @@ describe('Workflow events inbox',()=>{
     expect(messages.map(x=>x.channel)).toEqual(['email','telegram']);
     expect(messages[0].text).toContain('Error: fetch-industry: HTTP 503');
     expect(messages[0].text).toContain('/workflows/article/instances/instance-1');
+    expect(messages[0].text).not.toContain(messages[0].subject);
+    expect(messages[1].text.split(messages[0].subject)).toHaveLength(2);
     await receiveWorkflowEvent(bindings,source); expect(await contents()).toHaveLength(2);
   });
   it.each(['omo','market-briefing'])('notifies %s success using Workflow output',async name=>{
@@ -39,6 +41,7 @@ describe('Workflow events inbox',()=>{
     await receiveWorkflowEvent(bindings,event(name,'completed'));
     const messages=await contents(); expect(messages).toHaveLength(2);
     expect(messages[0].text).toContain(name==='omo'?'净投放1590亿元。':'股市判断\n债市判断');
+    expect(messages[1].text.split(messages[0].subject)).toHaveLength(2);
   });
   it('suppresses ordinary success but reports nested business partial failures',async()=>{
     status.mockResolvedValue({status:'complete',output:{status:'archived'}});
@@ -52,6 +55,33 @@ describe('Workflow events inbox',()=>{
     await receiveWorkflowEvent(bindings,event()); expect(await contents()).toHaveLength(0);
     expect(await db.prepare('SELECT attempts,completed_at FROM workflow_events').first()).toMatchObject({attempts:1,completed_at:null});
     await recoverWorkflowEvents(bindings,Date.now()+60_000); expect(await contents()).toHaveLength(2);
+  });
+  it.each(['completed','errored'])('renders nested JSON errors as readable, redacted text for %s',async type=>{
+    const error = JSON.stringify({path:'/choice/ctr',parameters:{reportName:'BondTradingStatistics'},status:503,
+      responseBody:JSON.stringify({detail:'user has no access for this API',error:{upstreamResponse:{
+        body:JSON.stringify({error:{code:'CHOICE_UPSTREAM',upstreamCode:10001003,message:'user has no access for this API'},
+          authorization:'Bearer private credential',accessToken:'another secret'}),
+      }}})});
+    const output={status:'partial',failures:[],quant:{status:'partial',failures:[
+      {source:'primary-2026-09-19',error:'Stored date has missing fields: WEIGHTED_COST'},
+      {source:'secondary',error},
+    ]}};
+    status.mockResolvedValue(type==='completed'?{status:'complete',output}
+      :{status:'errored',error:{name:'Error',message:JSON.stringify(output)}});
+    await receiveWorkflowEvent(bindings,event('economic-indicator-sync',type));
+    const messages=await contents();
+    const text=messages.filter(x=>x.channel==='telegram').map(x=>x.text).join('');
+    for(const detail of ['source: secondary','reportName: BondTradingStatistics','upstreamCode: 10001003',
+      'user has no access for this API','WEIGHTED_COST','[REDACTED]'])expect(text).toContain(detail);
+    for(const escaped of ['\\"','\\_','\\\n','private credential','another secret'])expect(text).not.toContain(escaped);
+    expect(text.split('【Workflow 失败】economic-indicator-sync')).toHaveLength(2);
+    if(type==='completed')expect(text).not.toContain('output.failures:');
+  });
+  it('preserves literal backslashes in non-JSON errors',async()=>{
+    const message=String.raw`read C:\reports\input.json: expected "WEIGHTED_COST"`;
+    status.mockResolvedValue({status:'errored',error:{name:'Error',message}});
+    await receiveWorkflowEvent(bindings,event());
+    expect((await contents())[0].text).toContain(message);
   });
   it('freezes payloads before channel enqueue so partial failures and replay cannot conflict',async()=>{
     await db.prepare("CREATE TRIGGER reject_telegram BEFORE INSERT ON messages WHEN NEW.channel='telegram' BEGIN SELECT RAISE(FAIL,'temporary storage outage'); END").run();

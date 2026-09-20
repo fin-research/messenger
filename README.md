@@ -52,7 +52,7 @@ Cloudflare Event Subscriptions → Queue `messenger-workflow-events` → D1 `wor
 
 - 全部 Workflow 订阅 instance.errored / instance.terminated；omo、market-briefing 额外订阅 instance.completed。economic-indicator-sync 的 completed 只用于检查业务 partial/failed，正常成功不通知。
 - Queue 事件只带实例 ID，Messenger 通过跨脚本 Workflow binding 的 get/status 读取 error.name/message 或成功 output；不增加 Cloudflare API 运行时凭据。
-- 旧 email/Telegram 收件配置通过 LEGACY_WORKFLOW_USER_ID 一次性迁入该账号的 workflow 订阅，读取 WORKFLOW_NOTIFICATION_EMAILS 与 Secrets Store TELEGRAM_USER_ID；已有个人设置不会被覆盖。随后完全由用户订阅解析渠道。失败包含 Workflow、实例、时间、原始错误类型/详情和实例链接；敏感凭据脱敏，长 Telegram 分片保留正文。
+- 旧 email/Telegram 收件配置通过 LEGACY_WORKFLOW_USER_ID 一次性迁入该账号的 workflow 订阅，读取 WORKFLOW_NOTIFICATION_EMAILS 与 Secrets Store TELEGRAM_USER_ID；已有个人设置不会被覆盖。随后完全由用户订阅解析渠道。失败包含 Workflow、实例、时间、原始错误类型/详情和实例链接；标题与正文分开，渠道只拼接一次标题。嵌套 JSON 错误解码为分行纯文本后脱敏，保留来源、接口和错误码；普通文本中的反斜杠保持原样。详情限制长度和层级，截断时明确标记，长 Telegram 分片保留格式化正文。
 - 事件按账户/Workflow/实例/版本/事件类型/时间去重，先写 inbox，再冻结通知快照；部分渠道入队失败可恢复且不重复发送已入队渠道。同一实例重启后的新事件可再次通知。
 - 查询和入队失败由每分钟 Cron 恢复；消息渠道仍使用原有退避、Email 幂等窗口和 Telegram uncertain 规则。inbox last_error 只存安全码。
 - 事件持久化前失败由 Queue 重试，耗尽后保留在 messenger-workflow-events-dlq；运维需检查死信并原样重投事件队列。禁止将未知 schema 或未配置 binding 的事件当成功丢弃。

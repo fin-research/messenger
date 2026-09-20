@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import { messageSchema, type Bindings, type MessageInput } from './contracts';
 import { notify, migrateLegacyWorkflowSubscriber } from './notifications';
-import { enqueue } from './service';
 
 export const workflowBindings = {
   omo: 'OMO',
@@ -38,6 +37,40 @@ export function safeDetail(value: string): string {
     .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[REDACTED]@');
 }
 
+/** Unwrap JSON error envelopes before rendering plain text for all channels. */
+function formatDetail(value: unknown): string {
+  const limit = 30_000;
+  let text = '', truncated = false;
+  function append(line: string) {
+    const next = `${text ? '\n' : ''}${safeDetail(line)}`;
+    truncated ||= text.length + next.length > limit;
+    text += next.slice(0, limit - text.length);
+  }
+  function render(item: unknown, label = '', depth = 0) {
+    if (text.length >= limit) { truncated = true; return; }
+    const prefix = `${'  '.repeat(depth)}${label ? `${label}: ` : ''}`;
+    if (depth > 16) { append(`${prefix}[详情层级过深]`); return; }
+    // Bound both parsing and recursive traversal; ordinary strings remain literal.
+    if (typeof item === 'string' && item.length <= 100_000 && /^[\s]*[\[{\"]/.test(item)) {
+      try { render(JSON.parse(item), label, depth + 1); return; } catch { /* Plain text. */ }
+    }
+    if (item !== null && typeof item === 'object') {
+      const entries = Object.entries(item);
+      if (!entries.length) { append(`${prefix}${Array.isArray(item) ? '[]' : '{}'}`); return; }
+      if (label) append(prefix.trimEnd());
+      for (const [key, child] of entries) {
+        if (text.length >= limit) { truncated = true; break; }
+        const sensitive = /(?:api[_-]?key|token|password|secret|authorization|cookie)$/i.test(key);
+        render(sensitive ? '[REDACTED]' : child, Array.isArray(item) ? `[${Number(key) + 1}]` : key, depth + 1);
+      }
+      return;
+    }
+    append(`${prefix}${String(item)}`);
+  }
+  render(value);
+  return text + (truncated ? '\n[详情已截断，请查看实例记录]' : '');
+}
+
 function businessFailures(value: unknown, path = 'output', depth = 0): string[] {
   if (!value || typeof value !== 'object' || depth > 4) return [];
   const item = value as Record<string, unknown>;
@@ -45,7 +78,8 @@ function businessFailures(value: unknown, path = 'output', depth = 0): string[] 
   const details: string[] = failed ? [`${path}.status=${String(item.status)}`] : [];
   for (const [key, child] of Object.entries(item)) {
     if (['failures', 'errors', 'error', 'message'].includes(key) && child && failed) {
-      details.push(`${path}.${key}: ${safeDetail(JSON.stringify(child)).slice(0, 30_000)}`);
+      if (Array.isArray(child) && child.length === 0) continue;
+      details.push(`${path}.${key}:\n${formatDetail(child)}`);
     } else if (!Array.isArray(child) && child && typeof child === 'object') {
       details.push(...businessFailures(child, `${path}.${key}`, depth + 1));
     }
@@ -64,17 +98,18 @@ export function notificationMessages(env: Bindings, event: WorkflowEvent, id: st
   const error = errorSchema.safeParse(state.error);
   const output = outputSchema.safeParse(state.output);
   const detail = failed
-    ? [error.success ? `${error.data.name}: ${safeDetail(error.data.message)}` : '', ...issues,
+    ? [error.success ? `${error.data.name}: ${formatDetail(error.data.message)}` : '', ...issues,
       event.type.endsWith('.terminated') ? '实例被终止。' : '',
     ].filter(Boolean).join('\n') || `平台已发出失败事件，当前状态 ${state.status}；平台未返回原始错误详情，请查看实例记录。`
     : output.success ? name === 'omo' ? output.data.text ?? '公开市场播报已获取。'
       : `报告已归档。\n\n${output.data.focus ?? ''}\n\n报告：https://eastmoney.hasbai.xyz/market-briefing?date=${encodeURIComponent(output.data.reportDate ?? '')}`
     : 'Workflow 已完成。';
-  const text = `${heading}\n实例：${event.payload.instanceId}\n时间：${event.metadata.eventTimestamp}\n\n${detail}\n\n${link}`;
+  // Notification delivery owns the title; the body must not repeat it.
+  const text = `实例：${event.payload.instanceId}\n时间：${event.metadata.eventTimestamp}\n\n${detail}\n\n${link}`;
   const to = z.array(z.email()).min(1).max(50).parse([...new Set(env.WORKFLOW_NOTIFICATION_EMAILS.split(/[;,\s]+/).filter(Boolean))]);
   const result: MessageInput[] = [messageSchema.parse({ source: 'workflow', idempotencyKey: `${id}/email`, channel: 'email', to, subject: heading, text })];
   // Preserve all error details and business content in Telegram, splitting only at channel limits.
-  const characters = Array.from(text);
+  const characters = Array.from(`${heading}\n${text}`);
   for (let start = 0, part = 0; start < characters.length; start += 1800, part++) {
     result.push(messageSchema.parse({ source: 'workflow', idempotencyKey: `${id}/telegram/${part}`, channel: 'telegram', text: characters.slice(start, start + 1800).join('') }));
   }
