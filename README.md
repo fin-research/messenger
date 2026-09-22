@@ -23,6 +23,8 @@ Telegram 使用 `channel: "telegram"`、`text`，可选 `chatId`；省略时读�
 `queued → processing → accepted / retrying / failed / uncertain`。
 
 - D1 先持久化、后发 Queue；每分钟 Cron 恢复未成功入队、到期重试和过期 lease。Queue 至少一次交付通过 D1 原子认领去重。
+- 两条 Queue 的批次等待上限为 1 秒。投递批次按 email、Telegram、Web Push 与 notification 分组并行，各组内顺序执行；保留单消费者，避免放大单渠道压力及打乱同批 Telegram 分片。逐条 ack/retry，等待全部分组完成。
+- 安全耗时日志区分 Queue 等待、notification 资格查询及展开、发送前资格复核和渠道调用；仅记录 ID、渠道和毫秒耗时。attempt 总耗时包括资格复核，不能直接当作渠道网络耗时。
 - 每轮最多 6 次尝试，30 秒起指数退避；Telegram 429 尊重 retry_after。明确永久失败直接结束。
 - `accepted` 是 Resend / Telegram 接收，未接收邮件回执，不能当作最终送达。
 - Telegram 网络错误或 Worker 中断进入 uncertain，人工确认后才可重发。Resend 使用稳定渠道幂等键，自动重试限 23 小时安全窗口。

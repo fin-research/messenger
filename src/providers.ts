@@ -23,13 +23,21 @@ export async function deliver(env: Bindings, input: MessageInput, key: string): 
       throw new DeliveryError('NOTIFICATION_CONTACT_CHANGED');
     if(!env.NOTIFICATION_SOURCE)throw new DeliveryError('NOTIFICATION_ELIGIBILITY_UNAVAILABLE',true);
     let users:{id:string;categories:string[]}[];
+    const eligibilityStarted=Date.now();
     try {
       const response=await env.NOTIFICATION_SOURCE.fetch('https://notifications.internal/eligible');
       if(!response.ok)throw new Error();
       users=await response.json();
     } catch {throw new DeliveryError('NOTIFICATION_ELIGIBILITY_UNAVAILABLE',true);}
+    finally {console.info('delivery_eligibility',{key,channel:input.channel,durationMs:Date.now()-eligibilityStarted});}
     if(!users.some(user=>user.id===userId&&user.categories.includes(category)))throw new DeliveryError('NOTIFICATION_ACCESS_REVOKED');
   }
+  const started=Date.now();
+  try { return await deliverToProvider(env,input,key); }
+  finally { console.info('delivery_provider',{key,channel:input.channel,durationMs:Date.now()-started}); }
+}
+
+async function deliverToProvider(env: Bindings, input: MessageInput, key: string): Promise<string> {
   if (input.channel === 'webpush') {
     const active = await env.DB.prepare('SELECT id FROM push_subscriptions WHERE id=? AND user_id=? AND endpoint=?')
       .bind(input.subscriptionId, input.userId, input.subscription.endpoint).first();

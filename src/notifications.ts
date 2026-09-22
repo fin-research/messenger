@@ -73,7 +73,9 @@ export async function eligibleUsers(env:Bindings):Promise<{id:string;categories:
  return z.array(z.object({id:z.string(),categories:z.array(z.enum(categories))})).parse(await response.json());
 }
 async function deliveries(env:Bindings,id:string,event:Notification):Promise<MessageInput[]> {
+ const started=Date.now();
  const eligible=new Set((await eligibleUsers(env)).filter(u=>u.categories.includes(event.category)&&(!event.userIds||event.userIds.includes(u.id))).map(u=>u.id));
+ console.info('notification_eligibility',{id,durationMs:Date.now()-started});
  const rows=await env.DB.prepare('SELECT * FROM notification_settings').all<SettingsRow>();
  const result:MessageInput[]=[];
  for(const row of rows.results) {
@@ -94,7 +96,8 @@ async function deliveries(env:Bindings,id:string,event:Notification):Promise<Mes
  return result;
 }
 export async function processNotification(env:Bindings,id:string) {
- const row=await env.DB.prepare('SELECT * FROM notifications WHERE id=?').bind(id).first<{payload:string;deliveries:string|null;completed_at:number|null;attempts:number}>();
+ const started=Date.now();
+ const row=await env.DB.prepare('SELECT * FROM notifications WHERE id=?').bind(id).first<{payload:string;deliveries:string|null;completed_at:number|null;attempts:number;created_at:number}>();
  if(!row||row.completed_at!==null)return;
  try {
   if(!row.deliveries){const items=await deliveries(env,id,notificationSchema.parse(JSON.parse(row.payload)));
@@ -105,6 +108,8 @@ export async function processNotification(env:Bindings,id:string) {
  }catch{
   await env.DB.prepare(`UPDATE notifications SET attempts=attempts+1,next_attempt_at=?,last_error='NOTIFICATION_DEFERRED' WHERE id=? AND completed_at IS NULL`)
    .bind(Date.now()+Math.min(3600_000,30000*2**Math.min(row.attempts,7)),id).run();
+ }finally{
+  console.info('notification_fanout',{id,queueAgeMs:started-row.created_at,durationMs:Date.now()-started});
  }
 }
 export async function recoverNotifications(env:Bindings,now=Date.now()) {

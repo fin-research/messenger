@@ -5,8 +5,9 @@ import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import type { Bindings, MessageRow } from './contracts';
 import { receiveWorkflowEvent, recoverWorkflowEvents } from './workflow-events';
-import { notify, settings, saveSettings, savePush, processNotification, recoverNotifications, scanNotifications, migrateLegacyWorkflowSubscriber } from './notifications';
-import { dto, enqueue, getMessage, processMessage, recover, retryMessage } from './service';
+import { notify, settings, saveSettings, savePush, recoverNotifications, scanNotifications, migrateLegacyWorkflowSubscriber } from './notifications';
+import { dto, enqueue, getMessage, recover, retryMessage } from './service';
+import { processDeliveryBatch } from './queue';
 import { sendTestMessages, recoverTestBatches } from './admin-tests';
 
 export const sender = new Hono<{Bindings: Bindings}>();
@@ -68,11 +69,7 @@ export default {
       }
       return;
     }
-    for(const message of batch.messages){
-      const parsed=z.object({id:z.string(),kind:z.literal('notification').optional()}).safeParse(message.body);
-      if(!parsed.success){message.ack();continue;}
-      try{if(parsed.data.kind==='notification')await processNotification(env,parsed.data.id);else await processMessage(env,parsed.data.id);message.ack();}catch{message.retry({delaySeconds:120});}
-    }
+    await processDeliveryBatch(batch,env);
   },
   async scheduled(event:ScheduledController,env:Bindings){await migrateLegacyWorkflowSubscriber(env);await Promise.all([recover(env),recoverWorkflowEvents(env),recoverNotifications(env),recoverTestBatches(env),scanNotifications(env,event.scheduledTime)]);},
 } satisfies ExportedHandler<Bindings,unknown>;
