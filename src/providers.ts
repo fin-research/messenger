@@ -25,7 +25,8 @@ export async function deliver(env: Bindings, input: MessageInput, key: string): 
     let users:{id:string;categories:string[]}[];
     const eligibilityStarted=Date.now();
     try {
-      const response=await env.NOTIFICATION_SOURCE.fetch('https://notifications.internal/eligible');
+      const url=new URL('https://notifications.internal/eligible');url.searchParams.append('userId',userId);
+      const response=await env.NOTIFICATION_SOURCE.fetch(url.toString());
       if(!response.ok)throw new Error();
       users=await response.json();
     } catch {throw new DeliveryError('NOTIFICATION_ELIGIBILITY_UNAVAILABLE',true);}

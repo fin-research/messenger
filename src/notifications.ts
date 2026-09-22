@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { HTTPException } from 'hono/http-exception';
 import { messageSchema, pushSubscriptionSchema, type Bindings, type MessageInput } from './contracts';
-import { enqueue } from './service';
+import { enqueue, processMessage } from './service';
 
 export const categories = ['workflow','trading','financing'] as const;
 export const channels = ['email','telegram','webpush'] as const;
@@ -54,7 +54,7 @@ export async function savePush(env:Bindings,userId:string,raw:unknown) {
 async function publish(env:Bindings,id:string) {
  try { await env.QUEUE.send({id,kind:'notification'}); } catch { console.warn('notification_publish_deferred'); }
 }
-export async function notify(env:Bindings,raw:unknown) {
+export async function notify(env:Bindings,raw:unknown,options:{directTelegram?:boolean}={}) {
  const parsed=notificationSchema.safeParse(raw);
  if(!parsed.success) throw new HTTPException(422,{message:'INVALID_NOTIFICATION'});
  const value=parsed.data,payload=JSON.stringify(value),now=Date.now();
@@ -63,20 +63,30 @@ export async function notify(env:Bindings,raw:unknown) {
  const row=await env.DB.prepare('SELECT id,payload FROM notifications WHERE source=? AND idempotency_key=?').bind(value.source,value.idempotencyKey).first<{id:string;payload:string}>();
  if(!row) throw new Error('NOTIFICATION_PERSIST_FAILED');
  if(row.payload!==payload) throw new HTTPException(409,{message:'IDEMPOTENCY_CONFLICT'});
+ // The inbox is already durable. OMO can progress immediately; Queue/Cron still recover failures.
+ if(options.directTelegram)await processNotification(env,row.id,options);
  await publish(env,row.id);
  return {id:row.id,status:'queued'};
 }
-export async function eligibleUsers(env:Bindings):Promise<{id:string;categories:string[]}[]> {
+export async function eligibleUsers(env:Bindings,userIds:string[]):Promise<{id:string;categories:string[]}[]> {
+ if(!userIds.length)return [];
  if(!env.NOTIFICATION_SOURCE) throw new Error('NOTIFICATION_SOURCE_UNAVAILABLE');
- const response=await env.NOTIFICATION_SOURCE.fetch('https://notifications.internal/eligible');
- if(!response.ok) throw new Error('NOTIFICATION_ELIGIBILITY_UNAVAILABLE');
- return z.array(z.object({id:z.string(),categories:z.array(z.enum(categories))})).parse(await response.json());
+ const unique=[...new Set(userIds)],result:{id:string;categories:string[]}[]=[];
+ for(let start=0;start<unique.length;start+=50){
+  const selected=unique.slice(start,start+50),url=new URL('https://notifications.internal/eligible');
+  for(const id of selected)url.searchParams.append('userId',id);
+  const response=await env.NOTIFICATION_SOURCE.fetch(url.toString());
+  if(!response.ok) throw new Error('NOTIFICATION_ELIGIBILITY_UNAVAILABLE');
+  result.push(...z.array(z.object({id:z.string(),categories:z.array(z.enum(categories))})).parse(await response.json()).filter(user=>selected.includes(user.id)));
+ }
+ return result;
 }
 async function deliveries(env:Bindings,id:string,event:Notification):Promise<MessageInput[]> {
  const started=Date.now();
- const eligible=new Set((await eligibleUsers(env)).filter(u=>u.categories.includes(event.category)&&(!event.userIds||event.userIds.includes(u.id))).map(u=>u.id));
- console.info('notification_eligibility',{id,durationMs:Date.now()-started});
  const rows=await env.DB.prepare('SELECT * FROM notification_settings').all<SettingsRow>();
+ const candidates=rows.results.filter(row=>(!event.userIds||event.userIds.includes(row.user_id))&&(JSON.parse(row.subscriptions)[event.category]?.length??0)>0);
+ const eligible=new Set((await eligibleUsers(env,candidates.map(row=>row.user_id))).filter(u=>u.categories.includes(event.category)).map(u=>u.id));
+ console.info('notification_eligibility',{id,durationMs:Date.now()-started});
  const result:MessageInput[]=[];
  for(const row of rows.results) {
   if(!eligible.has(row.user_id)) continue;
@@ -95,7 +105,7 @@ async function deliveries(env:Bindings,id:string,event:Notification):Promise<Mes
  }
  return result;
 }
-export async function processNotification(env:Bindings,id:string) {
+export async function processNotification(env:Bindings,id:string,options:{directTelegram?:boolean}={}) {
  const started=Date.now();
  const row=await env.DB.prepare('SELECT * FROM notifications WHERE id=?').bind(id).first<{payload:string;deliveries:string|null;completed_at:number|null;attempts:number;created_at:number}>();
  if(!row||row.completed_at!==null)return;
@@ -103,7 +113,14 @@ export async function processNotification(env:Bindings,id:string) {
   if(!row.deliveries){const items=await deliveries(env,id,notificationSchema.parse(JSON.parse(row.payload)));
    await env.DB.prepare('UPDATE notifications SET deliveries=? WHERE id=? AND deliveries IS NULL').bind(JSON.stringify(items),id).run();}
   const snapshot=await env.DB.prepare('SELECT deliveries FROM notifications WHERE id=?').bind(id).first<{deliveries:string}>();
-  for(const item of z.array(messageSchema).parse(JSON.parse(snapshot!.deliveries)))await enqueue(env,item);
+  const items=z.array(messageSchema).parse(JSON.parse(snapshot!.deliveries));
+  // Only accelerate a single Telegram message, avoiding cross-consumer fragment reordering.
+  const direct=options.directTelegram&&items.filter(item=>item.channel==='telegram').length===1;
+  if(direct)items.sort((a,b)=>Number(b.channel==='telegram')-Number(a.channel==='telegram'));
+  for(const item of items){
+   const message=await enqueue(env,item);
+   if(direct&&item.channel==='telegram')await processMessage(env,message.id);
+  }
   await env.DB.prepare('UPDATE notifications SET completed_at=?,last_error=NULL WHERE id=? AND completed_at IS NULL').bind(Date.now(),id).run();
  }catch{
   await env.DB.prepare(`UPDATE notifications SET attempts=attempts+1,next_attempt_at=?,last_error='NOTIFICATION_DEFERRED' WHERE id=? AND completed_at IS NULL`)

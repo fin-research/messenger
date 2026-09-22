@@ -6,6 +6,9 @@ import messagesSchema from '../migrations/0001_messages.sql?raw';
 import eventsSchema from '../migrations/0002_workflow_events.sql?raw';
 import { receiveWorkflowEvent, recoverWorkflowEvents, safeDetail } from '../src/workflow-events';
 import type { Bindings } from '../src/contracts';
+import { deliver, DeliveryError } from '../src/providers';
+import { processMessage } from '../src/service';
+vi.mock('../src/providers', async importOriginal => ({...await importOriginal<typeof import('../src/providers')>(), deliver:vi.fn(async()=> 'accepted-test')}));
 const db = (env as unknown as Bindings).DB;
 const account = '5cecc63c78acf8f5473f8745f4244448';
 const status = vi.fn();
@@ -23,8 +26,42 @@ beforeEach(async()=>{
   await saveSettings(bindings,'auth0|test',{email:'test@example.com',telegramChatId:'123',subscriptions:{workflow:['email','telegram'],trading:[],financing:[]}});
   status.mockReset(); status.mockResolvedValue({status:'errored',error:{name:'Error',message:'fetch-industry: HTTP 503'}});
   vi.mocked(bindings.QUEUE.send).mockReset();
+  vi.mocked(deliver).mockReset();vi.mocked(deliver).mockResolvedValue('accepted-test');
 });
 describe('Workflow events inbox',()=>{
+  it('OMO sends its durable Telegram immediately even when the queue is unavailable, without duplicates',async()=>{
+    status.mockResolvedValue({status:'complete',output:{status:'found',text:'净投放350亿元。'}});
+    vi.mocked(bindings.QUEUE.send).mockRejectedValue(new Error('queue unavailable'));
+    vi.mocked(deliver).mockImplementation(async(_env,input)=>{
+      expect(input.channel).toBe('telegram');
+      expect(input.notification).toEqual({userId:'auth0|test',category:'workflow'});
+      expect(await db.prepare("SELECT COUNT(*) AS n FROM messages WHERE channel='telegram' AND status='processing'").first()).toEqual({n:1});
+      return 'telegram-accepted';
+    });
+    const source=event('omo','completed');
+    await Promise.all([receiveWorkflowEvent(bindings,source),receiveWorkflowEvent(bindings,source)]);
+    const telegram=await db.prepare("SELECT id,status,attempts FROM messages WHERE channel='telegram'").first<{id:string;status:string;attempts:number}>();
+    expect(telegram).toMatchObject({status:'accepted',attempts:1});
+    await processMessage(bindings,telegram!.id);
+    await receiveWorkflowEvent(bindings,source);
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(await db.prepare("SELECT status FROM messages WHERE channel='email'").first()).toEqual({status:'queued'});
+  });
+  it('OMO inline Telegram keeps uncertain results final for automatic queue retries',async()=>{
+    status.mockResolvedValue({status:'complete',output:{text:'净投放350亿元。'}});
+    vi.mocked(deliver).mockRejectedValue(new DeliveryError('TELEGRAM_TRANSPORT_ERROR',false,true));
+    await receiveWorkflowEvent(bindings,event('omo','completed'));
+    const telegram=await db.prepare("SELECT id,status FROM messages WHERE channel='telegram'").first<{id:string;status:string}>();
+    expect(telegram?.status).toBe('uncertain');
+    await processMessage(bindings,telegram!.id);
+    expect(deliver).toHaveBeenCalledOnce();
+  });
+  it('multi-fragment OMO uses the existing ordered queue instead of racing inline fragments',async()=>{
+    status.mockResolvedValue({status:'complete',output:{text:'公开市场操作'.repeat(600)}});
+    await receiveWorkflowEvent(bindings,event('omo','completed'));
+    expect((await db.prepare("SELECT id FROM messages WHERE channel='telegram'").all()).results.length).toBeGreaterThan(1);
+    expect(deliver).not.toHaveBeenCalled();
+  });
   it('notifies both channels with actual error details and deduplicates deliveries across subscriptions',async()=>{
     const source=event();
     await Promise.all([receiveWorkflowEvent(bindings,source),receiveWorkflowEvent(bindings,{...source,metadata:{...source.metadata,eventSubscriptionId:'replacement'}})]);
