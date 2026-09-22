@@ -25,6 +25,7 @@ Telegram 使用 `channel: "telegram"`、`text`，可选 `chatId`；省略时读�
 - D1 先持久化、后发 Queue；每分钟 Cron 恢复未成功入队、到期重试和过期 lease。Queue 至少一次交付通过 D1 原子认领去重。
 - 两条 Queue 的批次等待上限为 1 秒。投递批次按 email、Telegram、Web Push 与 notification 分组并行，各组内顺序执行；保留单消费者，避免放大单渠道压力及打乱同批 Telegram 分片。逐条 ack/retry，等待全部分组完成。
 - 安全耗时日志区分 Queue 等待、notification 资格查询及展开、发送前资格复核和渠道调用；仅记录 ID、渠道和毫秒耗时。attempt 总耗时包括资格复核，不能直接当作渠道网络耗时。
+- notification 先从本地订阅筛出候选账号，仅向 `/eligible?userId=...` 查询这些账号（每批最多 50）；发送前再按单一收件人实时复核。空受众不调用资格目录，不缓存授权结果。上游 Gateway/Dashboard 需先部署过滤契约；缺省全量查询仍向后兼容。
 - 每轮最多 6 次尝试，30 秒起指数退避；Telegram 429 尊重 retry_after。明确永久失败直接结束。
 - `accepted` 是 Resend / Telegram 接收，未接收邮件回执，不能当作最终送达。
 - Telegram 网络错误或 Worker 中断进入 uncertain，人工确认后才可重发。Resend 使用稳定渠道幂等键，自动重试限 23 小时安全窗口。
@@ -56,6 +57,7 @@ Cloudflare Event Subscriptions → Queue `messenger-workflow-events` → D1 `wor
 - Queue 事件只带实例 ID，Messenger 通过跨脚本 Workflow binding 的 get/status 读取 error.name/message 或成功 output；不增加 Cloudflare API 运行时凭据。
 - 旧 email/Telegram 收件配置通过 LEGACY_WORKFLOW_USER_ID 一次性迁入该账号的 workflow 订阅，读取 WORKFLOW_NOTIFICATION_EMAILS 与 Secrets Store TELEGRAM_USER_ID；已有个人设置不会被覆盖。随后完全由用户订阅解析渠道。失败包含 Workflow、实例、时间、原始错误类型/详情和实例链接；标题与正文分开，渠道只拼接一次标题。嵌套 JSON 错误解码为分行纯文本后脱敏，保留来源、接口和错误码；普通文本中的反斜杠保持原样。详情限制长度和层级，截断时明确标记，长 Telegram 分片保留格式化正文。
 - 事件按账户/Workflow/实例/版本/事件类型/时间去重，先写 inbox，再冻结通知快照；部分渠道入队失败可恢复且不重复发送已入队渠道。同一实例重启后的新事件可再次通知。
+- OMO completed 在通知 inbox 持久化后立即展开订阅，省去中间 notification Queue 等待；快照只有一条 Telegram 时优先持久化该消息并立即调用原投递流程。消息仍入 Queue 作为补偿，原子认领防止竞争重复发送，发送前实时复核、失败退避及 uncertain 规则不变。多收件人或多分片 Telegram 继续走既有顺序队列，避免直接发送与队列竞争打乱分片。其他 Workflow 沿用异步通知。
 - 查询和入队失败由每分钟 Cron 恢复；消息渠道仍使用原有退避、Email 幂等窗口和 Telegram uncertain 规则。inbox last_error 只存安全码。
 - 事件持久化前失败由 Queue 重试，耗尽后保留在 messenger-workflow-events-dlq；运维需检查死信并原样重投事件队列。禁止将未知 schema 或未配置 binding 的事件当成功丢弃。
 

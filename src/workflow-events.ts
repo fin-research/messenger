@@ -154,7 +154,11 @@ export async function processWorkflowEvent(env: Bindings, id: string) {
     const snapshot = await env.DB.prepare('SELECT messages FROM workflow_events WHERE id=?').bind(id).first<{messages: string}>();
     const messages = z.array(messageSchema).parse(JSON.parse(snapshot!.messages));
     const email=messages.find(message=>message.channel==='email');
-    if(email?.channel==='email') await notify(env,{source:'workflow',idempotencyKey:id,category:'workflow',title:email.subject,text:email.text ?? '',url:'/management/messenger'});
+    if(email?.channel==='email') {
+      const event=eventSchema.parse(JSON.parse(row.event));
+      await notify(env,{source:'workflow',idempotencyKey:id,category:'workflow',title:email.subject,text:email.text ?? '',url:'/management/messenger'},
+        {directTelegram:event.source.workflowName==='omo'&&event.type.endsWith('.completed')});
+    }
     await env.DB.prepare('UPDATE workflow_events SET completed_at=?,last_error=NULL WHERE id=? AND completed_at IS NULL').bind(Date.now(), id).run();
   } catch {
     await env.DB.prepare(`UPDATE workflow_events SET attempts=attempts+1,next_attempt_at=?,last_error='WORKFLOW_EVENT_DEFERRED' WHERE id=? AND completed_at IS NULL`)

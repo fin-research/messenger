@@ -32,6 +32,16 @@ it('recipient scope and current authorization limit subscriptions',async()=>{
  }
  expect((await db.prepare('SELECT id FROM messages').all()).results).toHaveLength(0);
 });
+it('eligibility queries include only subscribed target users and skip empty audiences',async()=>{
+ source.fetch.mockClear();
+ const row=await notify(bindings,{...event,userIds:['auth0|test']});await processNotification(bindings,row.id);
+ expect(source.fetch).toHaveBeenCalledOnce();
+ const query=new URL(String(vi.mocked(source.fetch).mock.calls[0][0]));
+ expect(query.searchParams.getAll('userId')).toEqual(['auth0|test']);
+ source.fetch.mockClear();
+ const empty=await notify(bindings,{...event,idempotencyKey:'empty',userIds:[]});await processNotification(bindings,empty.id);
+ expect(source.fetch).not.toHaveBeenCalled();
+});
 it('rechecks unsubscribe, contact changes, and revoked authorization before delayed delivery',async()=>{
  const row=await notify(bindings,event);await processNotification(bindings,row.id);
  const payload=JSON.parse((await db.prepare("SELECT payload FROM messages WHERE channel='email'").first<{payload:string}>())!.payload);
@@ -41,6 +51,8 @@ it('rechecks unsubscribe, contact changes, and revoked authorization before dela
  await expect(deliver(bindings,payload,'test')).rejects.toThrow('NOTIFICATION_CONTACT_CHANGED');
  await saveSettings(bindings,'auth0|test',configured);source.fetch.mockImplementation(async()=>Response.json([]));
  await expect(deliver(bindings,payload,'test')).rejects.toThrow('NOTIFICATION_ACCESS_REVOKED');
+ const call=vi.mocked(source.fetch).mock.calls.at(-1)!;
+ expect(new URL(String(call[0])).searchParams.getAll('userId')).toEqual(['auth0|test']);
 });
 it('push credentials are owner-scoped, encrypted, and removed after provider expiry',async()=>{
  const keys=webpush.generateVAPIDKeys();const subscription={endpoint:'https://fcm.googleapis.com/fcm/send/test',keys:{p256dh:keys.publicKey,auth:Buffer.alloc(16,1).toString('base64url')}};
