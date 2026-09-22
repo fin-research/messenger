@@ -24,8 +24,8 @@ Telegram 使用 `channel: "telegram"`、`text`，可选 `chatId`；省略时读�
 
 - D1 先持久化、后发 Queue；每分钟 Cron 恢复未成功入队、到期重试和过期 lease。Queue 至少一次交付通过 D1 原子认领去重。
 - 两条 Queue 的批次等待上限为 1 秒。投递批次按 email、Telegram、Web Push 与 notification 分组并行，各组内顺序执行；保留单消费者，避免放大单渠道压力及打乱同批 Telegram 分片。逐条 ack/retry，等待全部分组完成。
-- 安全耗时日志区分 Queue 等待、notification 资格查询及展开、发送前资格复核和渠道调用；仅记录 ID、渠道和毫秒耗时。attempt 总耗时包括资格复核，不能直接当作渠道网络耗时。
-- notification 先从本地订阅筛出候选账号，仅向 `/eligible?userId=...` 查询这些账号（每批最多 50）；发送前再按单一收件人实时复核。空受众不调用资格目录，不缓存授权结果。上游 Gateway/Dashboard 需先部署过滤契约；缺省全量查询仍向后兼容。
+- 耗时日志区分 Queue 等待、notification 展开和渠道调用；仅记录 ID、渠道和毫秒耗时。
+- 通知展开与发送只读取 Messenger D1 的订阅、联系方式和 Push 设备，不调用 Auth0 或 Gateway 查询权限。
 - 每轮最多 6 次尝试，30 秒起指数退避；Telegram 429 尊重 retry_after。明确永久失败直接结束。
 - `accepted` 是 Resend / Telegram 接收，未接收邮件回执，不能当作最终送达。
 - Telegram 网络错误或 Worker 中断进入 uncertain，人工确认后才可重发。Resend 使用稳定渠道幂等键，自动重试限 23 小时安全窗口。
@@ -57,7 +57,7 @@ Cloudflare Event Subscriptions → Queue `messenger-workflow-events` → D1 `wor
 - Queue 事件只带实例 ID，Messenger 通过跨脚本 Workflow binding 的 get/status 读取 error.name/message 或成功 output；不增加 Cloudflare API 运行时凭据。
 - 旧 email/Telegram 收件配置通过 LEGACY_WORKFLOW_USER_ID 一次性迁入该账号的 workflow 订阅，读取 WORKFLOW_NOTIFICATION_EMAILS 与 Secrets Store TELEGRAM_USER_ID；已有个人设置不会被覆盖。随后完全由用户订阅解析渠道。失败包含 Workflow、实例、时间、原始错误类型/详情和实例链接；标题与正文分开，渠道只拼接一次标题。嵌套 JSON 错误解码为分行纯文本后脱敏，保留来源、接口和错误码；普通文本中的反斜杠保持原样。详情限制长度和层级，截断时明确标记，长 Telegram 分片保留格式化正文。
 - 事件按账户/Workflow/实例/版本/事件类型/时间去重，先写 inbox，再冻结通知快照；部分渠道入队失败可恢复且不重复发送已入队渠道。同一实例重启后的新事件可再次通知。
-- OMO completed 在通知 inbox 持久化后立即展开订阅，省去中间 notification Queue 等待；快照只有一条 Telegram 时优先持久化该消息并立即调用原投递流程。消息仍入 Queue 作为补偿，原子认领防止竞争重复发送，发送前实时复核、失败退避及 uncertain 规则不变。多收件人或多分片 Telegram 继续走既有顺序队列，避免直接发送与队列竞争打乱分片。其他 Workflow 沿用异步通知。
+- OMO completed 在通知 inbox 持久化后立即展开订阅，省去中间 notification Queue 等待；快照只有一条 Telegram 时优先持久化该消息并立即调用原投递流程。消息仍入 Queue 作为补偿，原子认领防止竞争重复发送，D1 退订与联系人检查、失败退避及 uncertain 规则不变。多收件人或多分片 Telegram 继续走既有顺序队列，避免直接发送与队列竞争打乱分片。其他 Workflow 沿用异步通知。
 - 查询和入队失败由每分钟 Cron 恢复；消息渠道仍使用原有退避、Email 幂等窗口和 Telegram uncertain 规则。inbox last_error 只存安全码。
 - 事件持久化前失败由 Queue 重试，耗尽后保留在 messenger-workflow-events-dlq；运维需检查死信并原样重投事件队列。禁止将未知 schema 或未配置 binding 的事件当成功丢弃。
 
@@ -77,15 +77,15 @@ node scripts/sync-workflow-subscriptions.mjs --apply
 
 ## 用户通知与 Web Push
 
-逻辑事件 `POST /notifications`（source、idempotencyKey、category、title、text、站内 url、可选 userIds）先进入 notifications inbox，Queue 只携带 `{id,kind:"notification"}`。消费者读取用户订阅与当前 Gateway 资格，冻结渠道消息，再进入原 messages 投递队列。生成端不读取联系方式、不决定渠道；最后发送前再次检查退订、联系方式变更和访问资格。旧 `/messages` 保留兼容既有明确收件人的业务。
+逻辑事件 `POST /notifications`（source、idempotencyKey、category、title、text、站内 url、可选 userIds）先进入 notifications inbox，Queue 只携带 `{id,kind:"notification"}`。消费者依据 D1 订阅和业务目标 userIds 冻结渠道消息，再进入原 messages 投递队列。生成端不读取联系方式、不决定渠道；最后发送前检查 D1 退订、联系方式变更和设备是否存在。旧 `/messages` 保留兼容既有明确收件人的业务。
 
-通知类型：workflow（管理员）、trading（交易研究读取权限）、financing（项目读取权限，并由业务指定责任人）。联系方式与订阅由 Messenger D1 独占，使用 Auth0 subject 关联；联系邮箱独立于账号邮箱。用户设置仅从 Dashboard 的 MessengerAdmin 绑定 `/users/:subject/settings` 读写；Dashboard 从可信会话派生 subject。推送设备每人最多 10 个，不返回 endpoint/auth/p256dh。队列只含 ID，管理详情也不暴露推送能力凭据。
+通知类型：workflow、trading、financing（由业务指定责任人）。联系方式与订阅由 Messenger D1 独占，使用账号 subject 关联；联系邮箱独立于登录邮箱。用户设置仍从 Dashboard 的 MessengerAdmin 绑定 `/users/:subject/settings` 读写；Dashboard 从可信会话派生 subject 并管理设置入口权限。推送设备每人最多 10 个，不返回 endpoint/auth/p256dh。队列只含 ID，管理详情也不暴露推送能力凭据。
 
 Web Push 使用 VAPID 与 aes128gcm；Secret 为 VAPID_PRIVATE_KEY，VAPID_PUBLIC_KEY 为公开配置，VAPID_SUBJECT 为 mailto 联系方式。通过 web-push 生成加密请求后使用 Workers fetch，禁止重定向，接收方限浏览器厂商推送域。404/410 移除失效设备，429/5xx 统一退避；浏览器以事件 tag 合并重复提示。
 
-Messenger 每分钟调用 Dashboard 私有 NotificationSource `/scan`，统一触发交易流程和融资待办的通知生成。业务查询和记录仍归 Dashboard；不直接绑定融资数据库。`/eligible` 从 Gateway 取得有效账号与通知资格，故障时不放宽权限。扫描使用 D1 槽位和 lease，失败保留重试；正常业务采集/报告 Workflow 的 Cron 保持在各自所有方。
+Messenger 每分钟调用 Dashboard 私有 NotificationSource `/scan`，请求携带 scheduledTime 和 D1 中订阅 trading 的 userIds，统一触发交易流程和融资待办的通知生成。业务查询和记录仍归 Dashboard；不直接绑定融资数据库。交易扫描直接使用传入名单，不查询 Auth0；融资责任人映射仍由业务所有方处理。扫描使用 D1 槽位和 lease，失败保留重试；正常业务采集/报告 Workflow 的 Cron 保持在各自所有方。
 
-发布：先部署 Gateway 资格接口和 admin 角色；应用 Dashboard 1019 D1 migration，部署含 NotificationSource 的 Dashboard；应用 Messenger 0003，配置 VAPID，部署 Messenger。0003 重建渠道 CHECK 时保留全部历史消息、尝试、人工重试及外键。升级前核对历史行计数和待处理事件，升级后回读版本、配置与表计数。不以模拟推送声称真实设备收到通知。
+初始安装应用 Dashboard 1019、Messenger 0003 migration，配置 VAPID；0003 重建渠道 CHECK 时保留全部历史消息、尝试、人工重试及外键。本次移除推送权限查询无需 migration：先部署提供 /scan userIds 的 Messenger，再部署 Dashboard 删除 /eligible 并使用名单，最后删除 Gateway 的通知资格接口。不以模拟推送声称真实设备收到通知。
 
 ## 管理员测试消息
 
