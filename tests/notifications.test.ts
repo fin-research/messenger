@@ -3,19 +3,16 @@ import {beforeAll,beforeEach,it,expect,vi} from 'vitest';
 import webpush from 'web-push';
 import initial from '../migrations/0001_messages.sql?raw';
 import migration from '../migrations/0003_user_notifications.sql?raw';
-import {notify,processNotification,saveSettings,savePush,settings,migrateLegacyWorkflowSubscriber} from '../src/notifications';
+import {notify,processNotification,saveSettings,savePush,settings,migrateLegacyWorkflowSubscriber,scanNotifications} from '../src/notifications';
 import {deliver} from '../src/providers';
 import type {Bindings} from '../src/contracts';
 const db=(env as unknown as Bindings).DB;
-const source={fetch:vi.fn(async()=>Response.json([{id:'auth0|test',categories:['trading','financing']}]))};
-const bindings={DB:db,QUEUE:{send:vi.fn(async()=>{})},NOTIFICATION_SOURCE:source} as unknown as Bindings;
+const bindings={DB:db,QUEUE:{send:vi.fn(async()=>{})}} as unknown as Bindings;
 const event={source:'trading',category:'trading',idempotencyKey:'day/node/time',title:'交易流程',text:'完成划款',url:'/trading-research/workflow'};
 const configured={email:'contact@example.com',telegramChatId:'123',subscriptions:{workflow:[],trading:['email','telegram'],financing:[]}};
 beforeAll(async()=>{await db.batch((initial+'\n'+migration).split(';').map(s=>s.trim()).filter(Boolean).map(sql=>db.prepare(sql)));});
 beforeEach(async()=>{
- await db.batch(['retry_audit','attempts','messages','notifications','push_subscriptions','notification_settings'].map(table=>db.prepare(`DELETE FROM ${table}`)));
- source.fetch.mockResolvedValue(Response.json([{id:'auth0|test',categories:['trading','financing']}]));
- source.fetch.mockImplementation(async()=>Response.json([{id:'auth0|test',categories:['trading','financing']}]));
+ await db.batch(['retry_audit','attempts','messages','notifications','push_subscriptions','notification_settings','notification_schedule'].map(table=>db.prepare(`DELETE FROM ${table}`)));
  await saveSettings(bindings,'auth0|test',configured);
 });
 it('generation persists independently, subscriptions fan out exactly once with contact email',async()=>{
@@ -26,33 +23,41 @@ it('generation persists independently, subscriptions fan out exactly once with c
  expect(rows).toHaveLength(2);expect(rows.find(row=>row.channel==='email').to).toEqual(['contact@example.com']);
  await expect(notify(bindings,{...event,text:'changed'})).rejects.toThrow('IDEMPOTENCY_CONFLICT');
 });
-it('recipient scope and current authorization limit subscriptions',async()=>{
+it('business recipient scope and D1 category subscriptions determine recipients',async()=>{
  for(const [id,extra] of [['unrelated',{userIds:['auth0|other']}],['admin',{category:'workflow'}]]){
   const row=await notify(bindings,{...event,idempotencyKey:id,...extra});await processNotification(bindings,row.id);
  }
  expect((await db.prepare('SELECT id FROM messages').all()).results).toHaveLength(0);
 });
-it('eligibility queries include only subscribed target users and skip empty audiences',async()=>{
- source.fetch.mockClear();
+it('D1 subscribers receive messages without an identity service; empty audiences send nothing',async()=>{
+ const outgoing=vi.spyOn(globalThis,'fetch').mockResolvedValue(Response.json({id:'mail-test'}));
+ try{
  const row=await notify(bindings,{...event,userIds:['auth0|test']});await processNotification(bindings,row.id);
- expect(source.fetch).toHaveBeenCalledOnce();
- const query=new URL(String(vi.mocked(source.fetch).mock.calls[0][0]));
- expect(query.searchParams.getAll('userId')).toEqual(['auth0|test']);
- source.fetch.mockClear();
+ const payload=JSON.parse((await db.prepare("SELECT payload FROM messages WHERE channel='email'").first<{payload:string}>())!.payload);
+ await expect(deliver({...bindings,RESEND_API_KEY:'test-key',FROM_EMAIL:'test@18.cn'},payload,'test')).resolves.toBe('mail-test');
+ expect(outgoing).toHaveBeenCalledOnce();
+ expect(String(outgoing.mock.calls[0][0])).toContain('api.resend.com');
  const empty=await notify(bindings,{...event,idempotencyKey:'empty',userIds:[]});await processNotification(bindings,empty.id);
- expect(source.fetch).not.toHaveBeenCalled();
+ expect((await db.prepare('SELECT id FROM messages').all()).results).toHaveLength(2);
+ }finally{outgoing.mockRestore();}
 });
-it('rechecks unsubscribe, contact changes, and revoked authorization before delayed delivery',async()=>{
+it('rechecks D1 unsubscribe and contact changes before delayed delivery',async()=>{
  const row=await notify(bindings,event);await processNotification(bindings,row.id);
  const payload=JSON.parse((await db.prepare("SELECT payload FROM messages WHERE channel='email'").first<{payload:string}>())!.payload);
  await saveSettings(bindings,'auth0|test',{...configured,subscriptions:{workflow:[],trading:[],financing:[]}});
  await expect(deliver(bindings,payload,'test')).rejects.toThrow('NOTIFICATION_UNSUBSCRIBED');
  await saveSettings(bindings,'auth0|test',{...configured,email:'changed@example.com'});
  await expect(deliver(bindings,payload,'test')).rejects.toThrow('NOTIFICATION_CONTACT_CHANGED');
- await saveSettings(bindings,'auth0|test',configured);source.fetch.mockImplementation(async()=>Response.json([]));
- await expect(deliver(bindings,payload,'test')).rejects.toThrow('NOTIFICATION_ACCESS_REVOKED');
- const call=vi.mocked(source.fetch).mock.calls.at(-1)!;
- expect(new URL(String(call[0])).searchParams.getAll('userId')).toEqual(['auth0|test']);
+});
+it('scan passes only D1 trading subscribers to Dashboard without querying eligibility',async()=>{
+ const now=Date.now(),fetch=vi.fn(async()=>Response.json({ok:true}));
+ await scanNotifications({...bindings,NOTIFICATION_SOURCE:{fetch} as unknown as Fetcher},now);
+ expect(fetch).toHaveBeenCalledOnce();
+ expect(fetch.mock.calls[0][0]).toBe('https://notifications.internal/scan');
+ expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toEqual({scheduledTime:Math.floor(now/60000)*60000,userIds:['auth0|test']});
+ await saveSettings(bindings,'auth0|test',{...configured,subscriptions:{workflow:['email'],trading:[],financing:[]}});
+ await scanNotifications({...bindings,NOTIFICATION_SOURCE:{fetch} as unknown as Fetcher},now+60000);
+ expect(JSON.parse(String(fetch.mock.calls[1][1]?.body)).userIds).toEqual([]);
 });
 it('push credentials are owner-scoped, encrypted, and removed after provider expiry',async()=>{
  const keys=webpush.generateVAPIDKeys();const subscription={endpoint:'https://fcm.googleapis.com/fcm/send/test',keys:{p256dh:keys.publicKey,auth:Buffer.alloc(16,1).toString('base64url')}};

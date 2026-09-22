@@ -21,17 +21,6 @@ export async function deliver(env: Bindings, input: MessageInput, key: string): 
     if(!row || !JSON.parse(row.subscriptions)[category]?.includes(input.channel))throw new DeliveryError('NOTIFICATION_UNSUBSCRIBED');
     if(input.channel==='email' && input.to.some(email=>email!==row.email) || input.channel==='telegram' && input.chatId!==row.telegram_chat_id)
       throw new DeliveryError('NOTIFICATION_CONTACT_CHANGED');
-    if(!env.NOTIFICATION_SOURCE)throw new DeliveryError('NOTIFICATION_ELIGIBILITY_UNAVAILABLE',true);
-    let users:{id:string;categories:string[]}[];
-    const eligibilityStarted=Date.now();
-    try {
-      const url=new URL('https://notifications.internal/eligible');url.searchParams.append('userId',userId);
-      const response=await env.NOTIFICATION_SOURCE.fetch(url.toString());
-      if(!response.ok)throw new Error();
-      users=await response.json();
-    } catch {throw new DeliveryError('NOTIFICATION_ELIGIBILITY_UNAVAILABLE',true);}
-    finally {console.info('delivery_eligibility',{key,channel:input.channel,durationMs:Date.now()-eligibilityStarted});}
-    if(!users.some(user=>user.id===userId&&user.categories.includes(category)))throw new DeliveryError('NOTIFICATION_ACCESS_REVOKED');
   }
   const started=Date.now();
   try { return await deliverToProvider(env,input,key); }

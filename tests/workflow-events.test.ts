@@ -14,7 +14,7 @@ const account = '5cecc63c78acf8f5473f8745f4244448';
 const status = vi.fn();
 const binding = { get: vi.fn(async () => ({status})) };
 const bindings = {DB:db, QUEUE:{send:vi.fn(async()=>{})}, CLOUDFLARE_ACCOUNT_ID:account, WORKFLOW_NOTIFICATION_EMAILS:'test@example.com',
-  NOTIFICATION_SOURCE:{fetch:async()=>Response.json([{id:'auth0|test',categories:['workflow']}])}, OMO:binding, MARKET_BRIEFING:binding, ARTICLE:binding, ECONOMIC_INDICATOR_SYNC:binding } as unknown as Bindings;
+  OMO:binding, MARKET_BRIEFING:binding, ARTICLE:binding, ECONOMIC_INDICATOR_SYNC:binding } as unknown as Bindings;
 const event = (name='article', type='errored', timestamp='2026-09-17T01:25:00.000Z') => ({
   type:`cf.workflows.workflow.instance.${type}`,source:{type:'workflows.workflow',workflowName:name},
   payload:{versionId:'v1',instanceId:'instance-1'},metadata:{accountId:account,eventTimestamp:timestamp,eventSchemaVersion:1,eventSubscriptionId:'subscription-1'},

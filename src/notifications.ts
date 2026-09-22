@@ -68,28 +68,11 @@ export async function notify(env:Bindings,raw:unknown,options:{directTelegram?:b
  await publish(env,row.id);
  return {id:row.id,status:'queued'};
 }
-export async function eligibleUsers(env:Bindings,userIds:string[]):Promise<{id:string;categories:string[]}[]> {
- if(!userIds.length)return [];
- if(!env.NOTIFICATION_SOURCE) throw new Error('NOTIFICATION_SOURCE_UNAVAILABLE');
- const unique=[...new Set(userIds)],result:{id:string;categories:string[]}[]=[];
- for(let start=0;start<unique.length;start+=50){
-  const selected=unique.slice(start,start+50),url=new URL('https://notifications.internal/eligible');
-  for(const id of selected)url.searchParams.append('userId',id);
-  const response=await env.NOTIFICATION_SOURCE.fetch(url.toString());
-  if(!response.ok) throw new Error('NOTIFICATION_ELIGIBILITY_UNAVAILABLE');
-  result.push(...z.array(z.object({id:z.string(),categories:z.array(z.enum(categories))})).parse(await response.json()).filter(user=>selected.includes(user.id)));
- }
- return result;
-}
 async function deliveries(env:Bindings,id:string,event:Notification):Promise<MessageInput[]> {
- const started=Date.now();
  const rows=await env.DB.prepare('SELECT * FROM notification_settings').all<SettingsRow>();
  const candidates=rows.results.filter(row=>(!event.userIds||event.userIds.includes(row.user_id))&&(JSON.parse(row.subscriptions)[event.category]?.length??0)>0);
- const eligible=new Set((await eligibleUsers(env,candidates.map(row=>row.user_id))).filter(u=>u.categories.includes(event.category)).map(u=>u.id));
- console.info('notification_eligibility',{id,durationMs:Date.now()-started});
  const result:MessageInput[]=[];
- for(const row of rows.results) {
-  if(!eligible.has(row.user_id)) continue;
+ for(const row of candidates) {
   const selected:string[]=JSON.parse(row.subscriptions)[event.category] ?? [];
   const common={notification:{userId:row.user_id,category:event.category},source:'notification',idempotencyKey:`${id}/${row.user_id}`};
   const text=`${event.text}\n\nhttps://eastmoney.hasbai.xyz${event.url}`;
@@ -139,7 +122,8 @@ export async function scanNotifications(env:Bindings,now:number) {
  await env.DB.prepare("INSERT OR IGNORE INTO notification_schedule(id) VALUES('dashboard')").run();
  const claim=await env.DB.prepare("UPDATE notification_schedule SET lease_until=? WHERE id='dashboard' AND completed_slot<? AND lease_until<? RETURNING id").bind(now+55000,slot,now).first();
  if(!claim)return;
- const response=await env.NOTIFICATION_SOURCE.fetch('https://notifications.internal/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scheduledTime:slot*60000})});
+ const subscribers=await env.DB.prepare("SELECT user_id FROM notification_settings WHERE json_array_length(subscriptions,'$.trading')>0").all<{user_id:string}>();
+ const response=await env.NOTIFICATION_SOURCE.fetch('https://notifications.internal/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scheduledTime:slot*60000,userIds:subscribers.results.map(row=>row.user_id)})});
  if(!response.ok)throw new Error('NOTIFICATION_SCAN_FAILED');
  await env.DB.prepare("UPDATE notification_schedule SET completed_slot=?,lease_until=0 WHERE id='dashboard' AND lease_until=?").bind(slot,now+55000).run();
 }
