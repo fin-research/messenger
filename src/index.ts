@@ -64,7 +64,7 @@ export default {
   async queue(batch:MessageBatch<unknown>,env:Bindings){
     if(batch.queue === "messenger-workflow-events") {
       for(const message of batch.messages) {
-        try { await receiveWorkflowEvent(env,message.body); message.ack(); }
+        try { await receiveWorkflowEvent(env,message.body,message.timestamp.getTime()); message.ack(); }
         catch { message.retry({delaySeconds:120}); }
       }
       return;

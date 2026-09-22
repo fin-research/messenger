@@ -116,10 +116,13 @@ export function notificationMessages(env: Bindings, event: WorkflowEvent, id: st
   return result;
 }
 
-export async function receiveWorkflowEvent(env: Bindings, raw: unknown) {
+export async function receiveWorkflowEvent(env: Bindings, raw: unknown, queuedAt?: number) {
   const parsed = eventSchema.safeParse(raw);
   if (!parsed.success || parsed.data.metadata.accountId !== env.CLOUDFLARE_ACCOUNT_ID) throw new Error('INVALID_WORKFLOW_EVENT');
   const event = parsed.data;
+  const receivedAt=Date.now();
+  console.info('workflow_event_received',{instanceId:event.payload.instanceId,
+    eventAgeMs:receivedAt-Date.parse(event.metadata.eventTimestamp),queueAgeMs:queuedAt===undefined?null:receivedAt-queuedAt});
   // Subscription IDs may change; the event identity must survive duplicate subscriptions and retries.
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify([
     event.metadata.accountId, event.source.workflowName, event.payload.instanceId,
