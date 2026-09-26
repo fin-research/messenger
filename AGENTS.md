@@ -12,4 +12,4 @@
 - 检查：`pnpm typegen`、`pnpm check`、`pnpm test`、`pnpm deploy:dry`、`git diff --check`。生产 migration 使用 `pnpm db:migrate:remote`。
 - 只提交本任务文件，推送并核对 CI；发布经过验证的提交，核对 Worker 版本与私有绑定。
 
-接口、状态和发布顺序见 README.md。
+接入示例见 [README](README.md)；投递状态与通知边界见[架构](docs/ARCHITECTURE.md)，验证、订阅与发布见[开发运维](docs/DEVELOPMENT.md)。
