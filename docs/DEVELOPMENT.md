@@ -17,7 +17,7 @@ Worker Secret 为 `RESEND_API_KEY`、`VAPID_PRIVATE_KEY`；Secrets Store 保存 
 
 ## Workflow 订阅
 
-平台事件映射以 `src/workflow-events.ts` 和 `wrangler.jsonc` 为准。新 Workflow 先部署所有方 binding，创建事件 Queue 与死信 Queue，应用 Messenger migration 并部署 Worker，再运行 `node scripts/sync-workflow-subscriptions.mjs` 只读计划；核对后用 `--apply` 同步。脚本不覆盖已有订阅；缺少 binding 时必须失败。死信需核实原因后原样重投事件 Queue，不把未知 schema 当成功丢弃。
+平台事件映射以 `src/workflow-events.ts` 和 `wrangler.jsonc` 为准。Data 内部 `dm-funding-sync` 子流程由主 `economic-indicator-sync` 汇总和通知，订阅同步脚本明确排除该子流程，不增加 Messenger binding 或独立通知。新 Workflow 先部署所有方 binding，创建事件 Queue 与死信 Queue，应用 Messenger migration 并部署 Worker，再运行 `node scripts/sync-workflow-subscriptions.mjs` 只读计划；核对后用 `--apply` 同步。脚本不覆盖已有订阅；缺少 binding 时必须失败。死信需核实原因后原样重投事件 Queue，不把未知 schema 当成功丢弃。
 
 ## 恢复边界
 

@@ -18,7 +18,10 @@ async function list(path){
     if(value.result.length<100 || page >= (value.result_info?.total_pages ?? Infinity)) return results;
   }
 }
-const [workflows,queues,subscriptions]=await Promise.all([list('/workflows'),list('/queues'),list('/event_subscriptions/subscriptions')]);
+const [allWorkflows,queues,subscriptions]=await Promise.all([list('/workflows'),list('/queues'),list('/event_subscriptions/subscriptions')]);
+// Internal child results are summarized and notified by their parent Workflow.
+const internalWorkflows=new Set(['dm-funding-sync']);
+const workflows=allWorkflows.filter(workflow=>!internalWorkflows.has(workflow.name));
 const configured=new Set(config.workflows.map(x=>x.name));
 const missing=workflows.filter(x=>!configured.has(x.name));
 if(missing.length) throw new Error(`Add cross-script bindings and workflowBindings entries first: ${missing.map(x=>x.name).join(', ')}`);
