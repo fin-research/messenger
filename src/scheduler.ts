@@ -3,11 +3,17 @@ import type { Bindings } from './contracts';
 const targets = ['INGEST_SCHEDULE', 'DASHBOARD_SCHEDULE', 'DATA_SCHEDULE', 'QUANT_SCHEDULE'] as const;
 export type ScheduleTarget = typeof targets[number];
 
+export function scheduledMinute(scheduledTime: number): number {
+  if (!Number.isSafeInteger(scheduledTime) || scheduledTime <= 0
+    || !Number.isFinite(new Date(scheduledTime).getTime())) throw new Error('Invalid scheduled time');
+  const minute = Math.floor(scheduledTime / 60_000) * 60_000;
+  if (minute <= 0) throw new Error('Invalid scheduled time');
+  return minute;
+}
+
 /** Cloudflare Cron expressions use UTC. Match the original planned minute. */
 export function dueTargets(scheduledTime: number): ScheduleTarget[] {
-  if (!Number.isSafeInteger(scheduledTime) || scheduledTime <= 0 || scheduledTime % 60_000 !== 0
-    || !Number.isFinite(new Date(scheduledTime).getTime())) throw new Error('Invalid scheduled time');
-  const date = new Date(scheduledTime);
+  const date = new Date(scheduledMinute(scheduledTime));
   const hour = date.getUTCHours(), minute = date.getUTCMinutes();
   const weekday = date.getUTCDay() >= 1 && date.getUTCDay() <= 5;
   return targets.filter(target => {
@@ -37,6 +43,7 @@ export async function settleScheduledJobs(jobs: { name: string; run: () => Promi
 }
 
 export async function dispatchScheduledTasks(env: Bindings, scheduledTime: number): Promise<void> {
+  scheduledTime = scheduledMinute(scheduledTime);
   await settleScheduledJobs(dueTargets(scheduledTime).map(target => ({
     name: target,
     async run() {
