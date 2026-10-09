@@ -87,6 +87,29 @@ describe('Workflow events inbox',()=>{
     await receiveWorkflowEvent(bindings,event('economic-indicator-sync','completed'));
     expect((await contents())[0].text).toContain('choice-css');
   });
+  it('notifies classified data gaps without labelling a completed sync as an execution failure',async()=>{
+    const groups=[{name:'同步 Quant 资金日报',status:'partial',failures:[],missing:[{
+      source:'fund-reports/2026-10-09.html',dates:['2026-10-09'],reason:'report_not_uploaded'}]}];
+    status.mockResolvedValue({status:'complete',output:{status:'partial',failures:[],groups,
+      quant:{status:'partial',failures:[],missing:groups[0].missing,groups}}});
+    await receiveWorkflowEvent(bindings,event('economic-indicator-sync','completed'));
+    const messages=await contents();expect(messages).toHaveLength(2);
+    expect(messages[0].subject).toBe('【Workflow 数据缺口】economic-indicator-sync');
+    expect(messages[0].text).toContain('报告尚未上传 1 项');
+    expect(messages[0].text).not.toContain('Workflow 失败');
+  });
+  it('platform error wins even if output contains only explicitly classified gaps',async()=>{
+    status.mockResolvedValue({status:'errored',error:{name:'Error',message:'runtime stopped'},output:{status:'partial',
+      failures:[{source:'primary',kind:'data_gap',error:'empty'}]}});
+    await receiveWorkflowEvent(bindings,event('economic-indicator-sync','errored'));
+    expect((await contents())[0].subject).toBe('【Workflow 失败】economic-indicator-sync');
+  });
+  it('reports execution failures present only inside business groups',async()=>{
+    status.mockResolvedValue({status:'complete',output:{status:'complete',groups:[{status:'partial',
+      failures:[{source:'database',error:'write failed',kind:'execution'}]}]}});
+    await receiveWorkflowEvent(bindings,event('economic-indicator-sync','completed'));
+    expect((await contents())[0].subject).toBe('【Workflow 失败】economic-indicator-sync');
+  });
   it('recovers lookup failure durably and never acknowledges away notification work',async()=>{
     status.mockRejectedValueOnce(new Error('binding unavailable'));
     await receiveWorkflowEvent(bindings,event()); expect(await contents()).toHaveLength(0);

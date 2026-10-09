@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { messageSchema, type Bindings, type MessageInput } from './contracts';
 import { notify, migrateLegacyWorkflowSubscriber } from './notifications';
+import { economicSyncHasOnlyDataGaps, economicSyncGapSummary } from './economic-sync-notification';
 
 export const workflowBindings = {
   omo: 'OMO',
@@ -80,6 +81,8 @@ function businessFailures(value: unknown, path = 'output', depth = 0): string[] 
     if (['failures', 'errors', 'error', 'message'].includes(key) && child && failed) {
       if (Array.isArray(child) && child.length === 0) continue;
       details.push(`${path}.${key}:\n${formatDetail(child)}`);
+    } else if (key === 'groups' && Array.isArray(child)) {
+      details.push(...child.flatMap((group, index) => businessFailures(group, `${path}.groups[${index}]`, depth + 1)));
     } else if (!Array.isArray(child) && child && typeof child === 'object') {
       details.push(...businessFailures(child, `${path}.${key}`, depth + 1));
     }
@@ -90,14 +93,16 @@ function businessFailures(value: unknown, path = 'output', depth = 0): string[] 
 export function notificationMessages(env: Bindings, event: WorkflowEvent, id: string, state: {status: string; error?: unknown; output?: unknown}): MessageInput[] {
   const name = event.source.workflowName;
   const issues = businessFailures(state.output);
-  const failed = !event.type.endsWith('.completed') || issues.length > 0;
+  const dataGapOnly = name === 'economic-indicator-sync' && event.type.endsWith('.completed') &&
+    state.status === 'complete' && !state.error && economicSyncHasOnlyDataGaps(state.output);
+  const failed = !event.type.endsWith('.completed') || !!state.error || issues.length > 0;
   if (!failed && !['omo', 'market-briefing'].includes(name)) return [];
-  const label = failed ? (event.type.endsWith('.terminated') ? '已终止' : '失败') : '成功';
+  const label = dataGapOnly ? '数据缺口' : failed ? (event.type.endsWith('.terminated') ? '已终止' : '失败') : '成功';
   const link = `https://dash.cloudflare.com/${event.metadata.accountId}/workers/workflows/${encodeURIComponent(name)}/instances/${encodeURIComponent(event.payload.instanceId)}`;
   const heading = `【Workflow ${label}】${name}`;
   const error = errorSchema.safeParse(state.error);
   const output = outputSchema.safeParse(state.output);
-  const detail = failed
+  const detail = dataGapOnly ? `同步已执行，以下数据仍待补齐：\n${safeDetail(economicSyncGapSummary(state.output))}` : failed
     ? [error.success ? `${error.data.name}: ${formatDetail(error.data.message)}` : '', ...issues,
       event.type.endsWith('.terminated') ? '实例被终止。' : '',
     ].filter(Boolean).join('\n') || `平台已发出失败事件，当前状态 ${state.status}；平台未返回原始错误详情，请查看实例记录。`
