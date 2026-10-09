@@ -17,3 +17,16 @@ D1 保存 messages、attempts 与审计，Queue 只携带 ID。状态为 `queued
 `POST /notifications` 写入逻辑通知，Queue 只携带 `{id,kind:"notification"}`；Messenger D1 独占订阅、联系方式和 Push 设备。提交方只决定业务类别、内容及目标账号，不直接读取联系人或选择渠道。发送前重新检查退订和设备归属；推送 endpoint/auth/p256dh 不进入日志或管理详情。Web Push 使用 VAPID 与 aes128gcm，限制浏览器厂商推送域且禁止重定向；404/410 移除失效设备，429/5xx 退避。
 
 Messenger 每分钟携带 D1 中交易订阅用户名单调用 Dashboard 私有 NotificationSource `/scan`；交易和融资候选业务查询仍归 Dashboard，投递资格只依 Messenger D1，不查询 Auth0。扫描槽位与 lease 由 Messenger 维护。管理员测试消息按选定用户及渠道使用已保存联系方式，冻结批次和目标，重试不能换收件人；入队与渠道接受都不等于终端送达。
+
+## 集中调度
+
+Messenger 是项目组唯一 Cloudflare Cron，`* * * * *` 每分钟执行。`src/scheduler.ts` 按原 `scheduledTime` 的 UTC 分钟匹配固定任务表，使用四个私有 `ScheduledTasks` Service Binding 发出 `POST /scheduled?scheduledTime=<毫秒>`，等待所有调用完成并分别记录失败。通知恢复与业务调度互不阻断。采集、交易日判断、Workflow 创建和幂等仍由业务仓库维护；不新增公网调度路径，不自动补跑历史或重启失败实例。
+
+| 绑定 | 原 UTC 时间表 |
+| --- | --- |
+| INGEST_SCHEDULE | `*/5 0-9 * * MON-FRI` |
+| DASHBOARD_SCHEDULE | `0 9 * * MON-FRI` |
+| DATA_SCHEDULE | `0 16 * * *` |
+| QUANT_SCHEDULE | `30 0 * * MON-FRI` |
+
+消费者只在命名入口接受分钟对齐的计划时间；`GET /health` 仅用于私有绑定连通性验证。成功响应表示该轮编排完成或正常跳过，不表示 Workflow 已终态成功。新增任务时同步绑定、时间表与所有方测试。

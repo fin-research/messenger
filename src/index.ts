@@ -9,6 +9,7 @@ import { notify, settings, saveSettings, savePush, recoverNotifications, scanNot
 import { dto, enqueue, getMessage, recover, retryMessage } from './service';
 import { processDeliveryBatch } from './queue';
 import { sendTestMessages, recoverTestBatches } from './admin-tests';
+import { dispatchScheduledTasks, settleScheduledJobs } from './scheduler';
 
 export const sender = new Hono<{Bindings: Bindings}>();
 export const admin = new Hono<{Bindings: Bindings}>();
@@ -71,5 +72,15 @@ export default {
     }
     await processDeliveryBatch(batch,env);
   },
-  async scheduled(event:ScheduledController,env:Bindings){await migrateLegacyWorkflowSubscriber(env);await Promise.all([recover(env),recoverWorkflowEvents(env),recoverNotifications(env),recoverTestBatches(env),scanNotifications(env,event.scheduledTime)]);},
+  async scheduled(event:ScheduledController,env:Bindings){
+    await settleScheduledJobs([
+      { name: 'dispatch', run: () => dispatchScheduledTasks(env,event.scheduledTime) },
+      { name: 'legacy-subscriber', run: () => migrateLegacyWorkflowSubscriber(env) },
+      { name: 'deliveries', run: () => recover(env) },
+      { name: 'workflow-events', run: () => recoverWorkflowEvents(env) },
+      { name: 'notifications', run: () => recoverNotifications(env) },
+      { name: 'test-batches', run: () => recoverTestBatches(env) },
+      { name: 'notification-scan', run: () => scanNotifications(env,event.scheduledTime) },
+    ],event.scheduledTime);
+  },
 } satisfies ExportedHandler<Bindings,unknown>;

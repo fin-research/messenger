@@ -22,3 +22,7 @@ Worker Secret 为 `RESEND_API_KEY`、`VAPID_PRIVATE_KEY`；Secrets Store 保存 
 ## 恢复边界
 
 D1 是事实来源；Queue 仅调度 ID。检查 inbox、outbox、lease、retry_audit 和死信，再决定恢复或人工重试。Telegram `uncertain` 要求确认渠道结果；Resend 幂等窗口过期后不能盲目自动重发。历史 Dashboard/Ingest 业务记录不删除，订阅与设备变更不通过重放旧消息改写。
+
+## Scheduler 切换
+
+先部署消费者 `ScheduledTasks` 入口并保留原 Cron，再部署 Messenger 调度及绑定，完成私有入口验证后移除其他 Worker Cron。移除可能需 15 分钟传播，重复投递始终使用原计划时间和既有稳定 Workflow ID。消费者配置最终显式 `triggers.crons=[]`，防止以后发布恢复 Cron。发布后读取账户实际 schedules，确认仅 Messenger 保留每分钟 Cron；日志 `scheduled_task_completed/failed` 表示对应私有调用结果。失败不会自动补跑已错过的槽位。

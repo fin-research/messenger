@@ -133,6 +133,10 @@
     }
   ],
   "services": [
+    { "binding": "INGEST_SCHEDULE", "service": "ingest", "entrypoint": "ScheduledTasks" },
+    { "binding": "DASHBOARD_SCHEDULE", "service": "eastmoney-dashboard", "entrypoint": "ScheduledTasks" },
+    { "binding": "DATA_SCHEDULE", "service": "eastmoney-data", "entrypoint": "ScheduledTasks" },
+    { "binding": "QUANT_SCHEDULE", "service": "quant", "entrypoint": "ScheduledTasks" },
     {
       "binding": "NOTIFICATION_SOURCE",
       "service": "eastmoney-dashboard",

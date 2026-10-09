@@ -38,6 +38,10 @@ export interface Bindings extends Partial<Record<WorkflowBindingName, Workflow>>
   VAPID_PRIVATE_KEY?: string;
   VAPID_SUBJECT?: string;
   NOTIFICATION_SOURCE?: Fetcher;
+  INGEST_SCHEDULE?: Fetcher;
+  DASHBOARD_SCHEDULE?: Fetcher;
+  DATA_SCHEDULE?: Fetcher;
+  QUANT_SCHEDULE?: Fetcher;
   RESEND_API_KEY: string;
   FROM_EMAIL: string;
   TELEGRAM_BOT_TOKEN: { get(): Promise<string> };
