@@ -11,6 +11,8 @@ pnpm deploy:dry
 git diff --check
 ```
 
+推送 `main` 会触发 Cloudflare Git 自动构建；跨服务变更必须先确认消费者入口已上线，再推送依赖其绑定的代码。必要手动发布使用同一已验证提交。
+
 Schema 变化新增 migration，不改写已应用文件。生产变更先执行 `pnpm db:migrate:remote`，再部署经验证的 Worker 并核对版本与私有 binding。真实外发测试必须明确收件人和发件人；模拟渠道测试不证明真实投递。
 
 Worker Secret 为 `RESEND_API_KEY`、`VAPID_PRIVATE_KEY`；Secrets Store 保存 `TELEGRAM_BOT_TOKEN` 与 `TELEGRAM_USER_ID`。VAPID 公钥为公开配置；不提交 `.dev.vars`、`.env` 或凭据。

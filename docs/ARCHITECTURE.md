@@ -20,7 +20,7 @@ Messenger 每分钟携带 D1 中交易订阅用户名单调用 Dashboard 私有 
 
 ## 集中调度
 
-Messenger 是项目组唯一 Cloudflare Cron，`* * * * *` 每分钟执行。`src/scheduler.ts` 按原 `scheduledTime` 的 UTC 分钟匹配固定任务表，使用四个私有 `ScheduledTasks` Service Binding 发出 `POST /scheduled?scheduledTime=<毫秒>`，等待所有调用完成并分别记录失败。通知恢复与业务调度互不阻断。采集、交易日判断、Workflow 创建和幂等仍由业务仓库维护；不新增公网调度路径，不自动补跑历史或重启失败实例。
+Messenger 是项目组唯一 Cloudflare Cron，`* * * * *` 每分钟执行。`src/scheduler.ts` 先校验原 `scheduledTime`，向下归一到 UTC 分钟（平台时间可能带秒偏移），再匹配固定任务表，使用四个私有 `ScheduledTasks` Service Binding 发出 `POST /scheduled?scheduledTime=<毫秒>`，等待所有调用完成并分别记录失败。通知恢复与业务调度互不阻断。采集、交易日判断、Workflow 创建和幂等仍由业务仓库维护；不新增公网调度路径，不自动补跑历史或重启失败实例。
 
 | 绑定 | 原 UTC 时间表 |
 | --- | --- |
